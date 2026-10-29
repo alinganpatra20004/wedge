@@ -11,7 +11,13 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+clap = { version = "4.5.61", features = ["derive"] }
+serde_json = "1.0.154"
+wedge-config = { version = "0.1.0", path = "../wedge-config" }
 wedge-core = { path = "../wedge-core", version = "0.1.0" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

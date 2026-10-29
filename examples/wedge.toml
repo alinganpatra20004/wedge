@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Example master configuration. Files in conf.d/ are merged on top of this
+# one in lexical order. Validate with: wedge check-config -c examples/wedge.toml
+#:schema ../schema/wedge.schema.json
+
+[server]
+listen = ["127.0.0.1:8080"]
+
+[[vhost]]
+name = "default"
+root = "/srv/wedge/default"

@@ -15,12 +15,14 @@
 
 mod merge;
 mod model;
+mod schema;
 
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use model::{Config, ServerConfig, VirtualHost};
+pub use schema::json_schema;
 
 /// Largest configuration file accepted, in bytes. Guards against accidental or
 /// hostile huge inputs.
@@ -48,11 +50,15 @@ pub enum ConfigError {
         #[source]
         source: Box<toml::de::Error>,
     },
+    #[error("configuration does not match the schema:\n  {}", .errors.join("\n  "))]
+    Schema { errors: Vec<String> },
     #[error("invalid configuration: {source}")]
     Invalid {
         #[source]
         source: Box<toml::de::Error>,
     },
+    #[error("invalid configuration:\n  {}", .errors.join("\n  "))]
+    Semantic { errors: Vec<String> },
 }
 
 /// Loads the master file at `master` and merges `conf.d/*.toml` beside it.
@@ -79,12 +85,23 @@ pub fn from_str(text: &str) -> Result<Config, ConfigError> {
     from_table(table)
 }
 
+/// Validates a merged document in three steps: JSON Schema (reports every
+/// structural error at once), typed decoding (value formats such as socket
+/// addresses), then cross-field rules.
 fn from_table(table: toml::Table) -> Result<Config, ConfigError> {
-    toml::Value::Table(table)
-        .try_into()
-        .map_err(|e| ConfigError::Invalid {
-            source: Box::new(e),
-        })
+    schema::validate(&table)?;
+    let config: Config =
+        toml::Value::Table(table)
+            .try_into()
+            .map_err(|e| ConfigError::Invalid {
+                source: Box::new(e),
+            })?;
+    let errors = config.semantic_errors();
+    if errors.is_empty() {
+        Ok(config)
+    } else {
+        Err(ConfigError::Semantic { errors })
+    }
 }
 
 /// Lists `*.toml` files in `dir`, sorted by file name. Hidden files and
@@ -215,7 +232,28 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         let err = from_str("[server]\nlisten = []\nlsiten = []\n").unwrap_err();
-        assert!(matches!(err, ConfigError::Invalid { .. }), "{err}");
+        assert!(matches!(err, ConfigError::Schema { .. }), "{err}");
+        assert!(err.to_string().contains("lsiten"), "{err}");
+    }
+
+    #[test]
+    fn reports_all_schema_errors_at_once() {
+        let err =
+            from_str("[server]\nlisten = 5\n[[vhost]]\nname = 1\nroot = \"/x\"\n").unwrap_err();
+        let ConfigError::Schema { errors } = err else {
+            panic!("expected schema error, got {err}");
+        };
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().any(|e| e.starts_with("/server/listen")));
+        assert!(errors.iter().any(|e| e.starts_with("/vhost/0/name")));
+    }
+
+    #[test]
+    fn rejects_duplicate_vhost_names() {
+        let text =
+            "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n[[vhost]]\nname = \"a\"\nroot = \"/y\"\n";
+        let err = from_str(text).unwrap_err();
+        assert!(matches!(err, ConfigError::Semantic { .. }), "{err}");
     }
 
     #[test]

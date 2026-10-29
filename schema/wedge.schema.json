@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "ServerConfig": {
+      "additionalProperties": false,
+      "description": "Process-wide server settings (`[server]`).",
+      "properties": {
+        "listen": {
+          "default": [],
+          "description": "Addresses to listen on, such as `\"0.0.0.0:80\"` or `\"[::]:443\"`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VirtualHost": {
+      "additionalProperties": false,
+      "description": "A virtual host (`[[vhost]]`).",
+      "properties": {
+        "name": {
+          "description": "Unique name used in logs and diagnostics.",
+          "maxLength": 253,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "description": "Directory served for this host.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "root"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete, merged server configuration.",
+  "properties": {
+    "server": {
+      "$ref": "#/$defs/ServerConfig"
+    },
+    "vhost": {
+      "items": {
+        "$ref": "#/$defs/VirtualHost"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}
