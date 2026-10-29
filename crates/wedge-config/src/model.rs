@@ -94,6 +94,10 @@ pub struct VirtualHost {
     pub name: String,
     /// Directory served for this host.
     pub root: PathBuf,
+    /// Serve files reached through symbolic links. Off by default; even when
+    /// on, the resolved file must still lie inside `root`.
+    #[serde(default)]
+    pub follow_symlinks: bool,
 }
 
 impl Config {

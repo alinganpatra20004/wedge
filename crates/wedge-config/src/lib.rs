@@ -73,7 +73,16 @@ pub fn load(master: &Path) -> Result<Config, ConfigError> {
     for file in peripheral_files(&conf_dir)? {
         merge::merge(&mut merged, read_table(&file)?);
     }
-    from_table(merged)
+    let mut config = from_table(merged)?;
+    // Relative document roots are relative to the master file, not to the
+    // working directory, so a config behaves the same wherever wedge starts.
+    let base = master.parent().unwrap_or_else(|| Path::new("."));
+    for vhost in &mut config.vhost {
+        if vhost.root.is_relative() {
+            vhost.root = base.join(&vhost.root);
+        }
+    }
+    Ok(config)
 }
 
 /// Parses a single configuration document without touching the filesystem.
@@ -185,6 +194,21 @@ mod tests {
         name = "default"
         root = "/srv/www"
     "#;
+
+    #[test]
+    fn relative_roots_resolve_against_master_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let master = write(
+            dir.path(),
+            "wedge.toml",
+            "[[vhost]]
+name = \"a\"
+root = \"www\"
+",
+        );
+        let cfg = load(&master).unwrap();
+        assert_eq!(cfg.vhost[0].root, dir.path().join("www"));
+    }
 
     #[test]
     fn loads_master_without_conf_d() {

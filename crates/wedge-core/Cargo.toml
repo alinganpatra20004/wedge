@@ -15,11 +15,14 @@ workspace = true
 
 [dependencies]
 bytes = "1.12.1"
+futures-util = "0.3.34"
 http-body-util = "0.1.5"
+httpdate = "1.0.3"
 hyper = { version = "1.12.0", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1.20", features = ["tokio", "server", "server-auto", "server-graceful", "http1", "http2"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal", "time", "sync"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal", "time", "sync", "fs", "io-util"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
 tracing = "0.1.44"
 wedge-config = { version = "0.1.0", path = "../wedge-config" }
 
@@ -28,4 +31,5 @@ bytes = "1.12.1"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http2"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
+tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }

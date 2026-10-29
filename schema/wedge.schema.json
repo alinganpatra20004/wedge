@@ -102,6 +102,11 @@
       "additionalProperties": false,
       "description": "A virtual host (`[[vhost]]`).",
       "properties": {
+        "follow_symlinks": {
+          "default": false,
+          "description": "Serve files reached through symbolic links. Off by default; even when\non, the resolved file must still lie inside `root`.",
+          "type": "boolean"
+        },
         "name": {
           "description": "Unique name used in logs and diagnostics.",
           "maxLength": 253,

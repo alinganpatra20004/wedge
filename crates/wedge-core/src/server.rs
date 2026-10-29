@@ -25,6 +25,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use wedge_config::{Config, Limits};
 
+use crate::files::{self, Root};
 use crate::idle::IdleTimeout;
 use crate::response::{self, Body};
 
@@ -39,6 +40,12 @@ pub enum ServerError {
         #[source]
         source: io::Error,
     },
+    #[error("document root of vhost {vhost:?} is not accessible: {source}")]
+    Root {
+        vhost: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// A server with its listeners bound, ready to run.
@@ -50,6 +57,7 @@ pub struct Server {
 /// Shared, read-only state for all connections.
 struct State {
     limits: Limits,
+    roots: Vec<Root>,
 }
 
 impl Server {
@@ -65,10 +73,24 @@ impl Server {
                 .map_err(|source| ServerError::Bind { addr, source })?;
             listeners.push(listener);
         }
+        let mut roots = Vec::new();
+        for vhost in &config.vhost {
+            let dir = tokio::fs::canonicalize(&vhost.root)
+                .await
+                .map_err(|source| ServerError::Root {
+                    vhost: vhost.name.clone(),
+                    source,
+                })?;
+            roots.push(Root {
+                dir,
+                follow_symlinks: vhost.follow_symlinks,
+            });
+        }
         Ok(Self {
             listeners,
             state: Arc::new(State {
                 limits: config.server.limits.clone(),
+                roots,
             }),
         })
     }
@@ -214,16 +236,21 @@ async fn handle(state: &State, req: Request<Incoming>, _peer: SocketAddr) -> Res
         return close(response::status(StatusCode::PAYLOAD_TOO_LARGE));
     }
     let timeout = Duration::from_secs(limits.request_timeout_secs);
-    match tokio::time::timeout(timeout, route(req)).await {
+    match tokio::time::timeout(timeout, route(state, req)).await {
         Ok(response) => response,
         Err(_) => response::status(StatusCode::SERVICE_UNAVAILABLE),
     }
 }
 
 /// Placeholder router: the static file handler arrives in task 2.2.
-async fn route(req: Request<Incoming>) -> Response<Body> {
+/// Routes to the static file handler of the first vhost; Host-based routing
+/// arrives in task 2.3.
+async fn route(state: &State, req: Request<Incoming>) -> Response<Body> {
     match *req.method() {
-        Method::GET | Method::HEAD => response::status(StatusCode::NOT_FOUND),
+        Method::GET | Method::HEAD => match state.roots.first() {
+            Some(root) => files::serve(root, req.method(), req.uri().path(), req.headers()).await,
+            None => response::status(StatusCode::NOT_FOUND),
+        },
         Method::OPTIONS => {
             let mut response = Response::new(response::empty());
             *response.status_mut() = StatusCode::NO_CONTENT;

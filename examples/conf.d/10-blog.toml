@@ -5,4 +5,4 @@
 
 [[vhost]]
 name = "blog"
-root = "/srv/wedge/blog"
+root = "www/blog"
