@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+
+# Pick dependency versions compatible with the workspace rust-version (MSRV).
+[resolver]
+incompatible-rust-versions = "fallback"
