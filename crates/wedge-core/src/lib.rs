@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Alingan Patra
 
-//! Core server types for webmaster.
+//! Core server types for wedge.
 
 /// Crate version, taken from Cargo metadata.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/webmaster-core", "crates/webmaster-config", "crates/webmaster"]
+members = ["crates/wedge-core", "crates/wedge-config", "crates/wedge"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,7 +11,7 @@ edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
 authors = ["Alingan Patra"]
-repository = "https://github.com/alinganpatra20004/webmaster"
+repository = "https://github.com/alinganpatra20004/wedge"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

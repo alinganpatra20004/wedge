@@ -1,4 +1,4 @@
-# webmaster
+# wedge
 
 An open-source web and application server written in Rust.
 
@@ -7,7 +7,7 @@ An open-source web and application server written in Rust.
 ## Planned features (v1)
 - HTTP/1.1 and HTTP/2, TLS via rustls
 - Static files, virtual hosts, reverse proxy
-- One master config (`webmaster.toml`) plus `conf.d/`, schema-validated
+- One master config (`wedge.toml`) plus `conf.d/`, schema-validated
 - Access/error logs, Prometheus metrics, hot reload
 
 ## License

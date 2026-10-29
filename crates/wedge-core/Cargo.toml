@@ -2,7 +2,7 @@
 # Copyright (c) Alingan Patra
 
 [package]
-name = "webmaster-config"
+name = "wedge-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

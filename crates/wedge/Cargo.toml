@@ -2,7 +2,7 @@
 # Copyright (c) Alingan Patra
 
 [package]
-name = "webmaster"
+name = "wedge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-webmaster-core = { path = "../webmaster-core", version = "0.1.0" }
+wedge-core = { path = "../wedge-core", version = "0.1.0" }
 
 [lints]
 workspace = true

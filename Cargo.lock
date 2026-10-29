@@ -3,16 +3,16 @@
 version = 3
 
 [[package]]
-name = "webmaster"
+name = "wedge"
 version = "0.1.0"
 dependencies = [
- "webmaster-core",
+ "wedge-core",
 ]
 
 [[package]]
-name = "webmaster-config"
+name = "wedge-config"
 version = "0.1.0"
 
 [[package]]
-name = "webmaster-core"
+name = "wedge-core"
 version = "0.1.0"

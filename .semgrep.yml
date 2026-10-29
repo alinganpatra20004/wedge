@@ -3,7 +3,7 @@
 #
 # Project-local Semgrep rules; run together with the registry ruleset p/rust.
 rules:
-  - id: webmaster-no-unwrap-in-lib
+  - id: wedge-no-unwrap-in-lib
     languages: [rust]
     severity: WARNING
     message: Avoid unwrap()/expect() in library code; return an error instead.
@@ -15,4 +15,4 @@ rules:
           #[cfg(test)]
           mod $M { ... }
     paths:
-      include: ["crates/webmaster-core/src/", "crates/webmaster-config/src/"]
+      include: ["crates/wedge-core/src/", "crates/wedge-config/src/"]
