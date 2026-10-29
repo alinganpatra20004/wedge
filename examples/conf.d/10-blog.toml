@@ -6,3 +6,4 @@
 [[vhost]]
 name = "blog"
 root = "www/blog"
+hosts = ["blog.localhost"]

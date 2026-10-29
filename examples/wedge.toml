@@ -7,6 +7,8 @@
 
 [server]
 listen = ["127.0.0.1:8080"]
+# Requests whose Host matches no vhost go here (otherwise 421).
+default_vhost = "default"
 
 [[vhost]]
 name = "default"

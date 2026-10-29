@@ -28,6 +28,7 @@ use wedge_config::{Config, Limits};
 use crate::files::{self, Root};
 use crate::idle::IdleTimeout;
 use crate::response::{self, Body};
+use crate::vhost::{Route, Router};
 
 /// Errors that stop the server.
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +59,7 @@ pub struct Server {
 struct State {
     limits: Limits,
     roots: Vec<Root>,
+    router: Router,
 }
 
 impl Server {
@@ -91,6 +93,7 @@ impl Server {
             state: Arc::new(State {
                 limits: config.server.limits.clone(),
                 roots,
+                router: Router::new(config),
             }),
         })
     }
@@ -243,14 +246,22 @@ async fn handle(state: &State, req: Request<Incoming>, _peer: SocketAddr) -> Res
 }
 
 /// Placeholder router: the static file handler arrives in task 2.2.
-/// Routes to the static file handler of the first vhost; Host-based routing
-/// arrives in task 2.3.
+/// Dispatches a request to the vhost chosen by its Host.
 async fn route(state: &State, req: Request<Incoming>) -> Response<Body> {
     match *req.method() {
-        Method::GET | Method::HEAD => match state.roots.first() {
-            Some(root) => files::serve(root, req.method(), req.uri().path(), req.headers()).await,
-            None => response::status(StatusCode::NOT_FOUND),
-        },
+        Method::GET | Method::HEAD => {
+            if state.roots.is_empty() {
+                return response::status(StatusCode::NOT_FOUND);
+            }
+            match state.router.route(req.uri(), req.headers()) {
+                Route::Vhost(index) => {
+                    let root = &state.roots[index];
+                    files::serve(root, req.method(), req.uri().path(), req.headers()).await
+                }
+                Route::Misdirected => response::status(StatusCode::MISDIRECTED_REQUEST),
+                Route::BadHost => close(response::status(StatusCode::BAD_REQUEST)),
+            }
+        }
         Method::OPTIONS => {
             let mut response = Response::new(response::empty());
             *response.status_mut() = StatusCode::NO_CONTENT;

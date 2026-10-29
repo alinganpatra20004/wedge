@@ -51,7 +51,7 @@ Trust boundaries:
 | T2.13 | Information disclosure in errors (paths, versions) | I | A05 / V7.4.1 | Generic error bodies; no `Server` version by default; filesystem paths only in server logs | implemented: generic status bodies, no Server header |
 | T2.14 | Log injection (CR/LF, ANSI escapes in request line) | R, T | A09 / V7.3.1 | Structured logs; escape control characters in logged fields | planned |
 | T2.15 | Unbounded compression work (zip bomb on our side) | D | A05 | Compress only on-the-fly for files under a size cap and for compressible types; prefer pre-compressed `.br`/`.gz` | implemented: only pre-compressed `.br`/`.gz` variants are served; no on-the-fly compression |
-| T2.16 | Host header used for vhost routing is spoofed | S | A01 | Unknown Host → default vhost (explicitly configured) or 421; Host is never used to build file paths | planned |
+| T2.16 | Host header used for vhost routing is spoofed | S | A01 | Unknown Host → default vhost (explicitly configured) or 421; Host is never used to build file paths | verified (`vhost::tests`, `host_routing_over_the_wire`) |
 
 ## Residual risks and assumptions
 

@@ -275,6 +275,30 @@ root = \"www\"
     }
 
     #[test]
+    fn vhost_host_rules() {
+        let shared = "[[vhost]]\nname = \"a\"\nroot = \"/x\"\nhosts = [\"x.com\"]\n\
+                      [[vhost]]\nname = \"b\"\nroot = \"/y\"\nhosts = [\"X.com\"]\n";
+        assert!(matches!(
+            from_str(shared),
+            Err(ConfigError::Semantic { .. })
+        ));
+        let bad_default =
+            "[server]\ndefault_vhost = \"nope\"\n[[vhost]]\nname = \"a\"\nroot = \"/x\"\n";
+        assert!(matches!(
+            from_str(bad_default),
+            Err(ConfigError::Semantic { .. })
+        ));
+        let bad_host = "[[vhost]]\nname = \"a\"\nroot = \"/x\"\nhosts = [\"a_b.com\"]\n";
+        assert!(matches!(
+            from_str(bad_host),
+            Err(ConfigError::Semantic { .. })
+        ));
+        let good = "[server]\ndefault_vhost = \"a\"\n[[vhost]]\nname = \"a\"\nroot = \"/x\"\n\
+                    hosts = [\"a.com\", \"*.a.com\"]\n";
+        assert!(from_str(good).is_ok());
+    }
+
+    #[test]
     fn rejects_duplicate_vhost_names() {
         let text =
             "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n[[vhost]]\nname = \"a\"\nroot = \"/y\"\n";

@@ -8,6 +8,7 @@ mod idle;
 mod path;
 mod response;
 mod server;
+mod vhost;
 
 pub use response::Body;
 pub use server::{Server, ServerError};

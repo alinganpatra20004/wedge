@@ -40,7 +40,8 @@ async fn site(extra_vhost: &str) -> Site {
     write("blob.bin", b"\x00\x01");
 
     let toml = format!(
-        "[server]\nlisten = [\"127.0.0.1:0\"]\n[[vhost]]\nname = \"t\"\nroot = {:?}\n{extra_vhost}\n",
+        "[server]\nlisten = [\"127.0.0.1:0\"]\ndefault_vhost = \"t\"\n\
+         [[vhost]]\nname = \"t\"\nroot = {:?}\n{extra_vhost}\n",
         root.display().to_string()
     );
     let config: Config = wedge_config::from_str(&toml).unwrap();
@@ -264,4 +265,44 @@ async fn missing_root_fails_at_startup() {
     let toml = "[server]\nlisten = [\"127.0.0.1:0\"]\n[[vhost]]\nname = \"x\"\nroot = \"/definitely/not/here\"\n";
     let config: Config = wedge_config::from_str(toml).unwrap();
     assert!(Server::bind(&config).await.is_err());
+}
+
+#[tokio::test]
+async fn host_routing_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a", "b"] {
+        std::fs::create_dir_all(dir.path().join(name)).unwrap();
+        std::fs::write(dir.path().join(name).join("index.html"), name).unwrap();
+    }
+    let root = |n: &str| format!("{:?}", dir.path().join(n).display().to_string());
+    let toml = format!(
+        "[server]\nlisten = [\"127.0.0.1:0\"]\n\
+         [[vhost]]\nname = \"a\"\nroot = {}\nhosts = [\"a.test\"]\n\
+         [[vhost]]\nname = \"b\"\nroot = {}\nhosts = [\"*.b.test\"]\n",
+        root("a"),
+        root("b")
+    );
+    let config: Config = wedge_config::from_str(&toml).unwrap();
+    let server = Server::bind(&config).await.unwrap();
+    let addr = server.local_addrs()[0];
+    let (_stop, rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = rx.await;
+    }));
+    let ask = |host: &'static str| async move {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!("GET / HTTP/1.1\r\n{host}Connection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
+        String::from_utf8_lossy(&buf).into_owned()
+    };
+    assert_eq!(body(&ask("Host: A.test:80\r\n").await), "a");
+    assert_eq!(body(&ask("Host: www.b.test\r\n").await), "b");
+    assert_eq!(status(&ask("Host: other.test\r\n").await), 421);
+    assert_eq!(status(&ask("").await), 400);
+    assert_eq!(
+        status(&ask("Host: a.test\r\nHost: www.b.test\r\n").await),
+        400
+    );
 }

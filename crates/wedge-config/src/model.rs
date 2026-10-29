@@ -27,6 +27,10 @@ pub struct ServerConfig {
     /// Addresses to listen on, such as `"0.0.0.0:80"` or `"[::]:443"`.
     #[serde(default)]
     pub listen: Vec<SocketAddr>,
+    /// Name of the vhost that answers requests whose Host matches no vhost.
+    /// When unset, such requests get 421 Misdirected Request.
+    #[serde(default)]
+    pub default_vhost: Option<String>,
     /// Resource limits; the defaults are safe for an internet-facing server.
     #[serde(default)]
     pub limits: Limits,
@@ -98,6 +102,10 @@ pub struct VirtualHost {
     /// on, the resolved file must still lie inside `root`.
     #[serde(default)]
     pub follow_symlinks: bool,
+    /// Host names this vhost answers, such as `"example.com"` or
+    /// `"*.example.com"` (any subdomain). Matching ignores case and port.
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 impl Config {
@@ -113,6 +121,24 @@ impl Config {
                 errors.push(format!("vhost {:?}: root must not be empty", vhost.name));
             }
         }
+        let mut hosts = HashSet::new();
+        for vhost in &self.vhost {
+            for host in &vhost.hosts {
+                if !valid_host_pattern(host) {
+                    errors.push(format!(
+                        "vhost {:?}: invalid host name {host:?}",
+                        vhost.name
+                    ));
+                } else if !hosts.insert(host.to_ascii_lowercase()) {
+                    errors.push(format!("host {host:?} is claimed by more than one vhost"));
+                }
+            }
+        }
+        if let Some(default) = &self.server.default_vhost {
+            if !self.vhost.iter().any(|v| &v.name == default) {
+                errors.push(format!("default_vhost {default:?} does not name a vhost"));
+            }
+        }
         let mut listen = HashSet::new();
         for addr in &self.server.listen {
             if !listen.insert(addr) {
@@ -120,5 +146,56 @@ impl Config {
             }
         }
         errors
+    }
+}
+
+/// A DNS name (letters, digits, hyphens, dots; labels 1 to 63 bytes), an IP
+/// literal, or `*.` followed by a DNS name.
+fn valid_host_pattern(pattern: &str) -> bool {
+    if pattern.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let name = pattern.strip_prefix("*.").unwrap_or(pattern);
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_patterns() {
+        for ok in [
+            "example.com",
+            "*.example.com",
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "a-b.c",
+        ] {
+            assert!(valid_host_pattern(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "*.",
+            "a..b",
+            "-a.com",
+            "a_b.com",
+            "*.*.com",
+            "ex ample.com",
+            "a.com:80",
+        ] {
+            assert!(!valid_host_pattern(bad), "{bad}");
+        }
     }
 }

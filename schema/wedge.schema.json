@@ -83,6 +83,14 @@
       "additionalProperties": false,
       "description": "Process-wide server settings (`[server]`).",
       "properties": {
+        "default_vhost": {
+          "default": null,
+          "description": "Name of the vhost that answers requests whose Host matches no vhost.\nWhen unset, such requests get 421 Misdirected Request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "limits": {
           "$ref": "#/$defs/Limits",
           "description": "Resource limits; the defaults are safe for an internet-facing server."
@@ -106,6 +114,14 @@
           "default": false,
           "description": "Serve files reached through symbolic links. Off by default; even when\non, the resolved file must still lie inside `root`.",
           "type": "boolean"
+        },
+        "hosts": {
+          "default": [],
+          "description": "Host names this vhost answers, such as `\"example.com\"` or\n`\"*.example.com\"` (any subdomain). Matching ignores case and port.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "name": {
           "description": "Unique name used in logs and diagnostics.",
