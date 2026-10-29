@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Project-local Semgrep rules; run together with the registry ruleset p/rust.
+rules:
+  - id: webmaster-no-unwrap-in-lib
+    languages: [rust]
+    severity: WARNING
+    message: Avoid unwrap()/expect() in library code; return an error instead.
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect(...)
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M { ... }
+    paths:
+      include: ["crates/webmaster-core/src/", "crates/webmaster-config/src/"]

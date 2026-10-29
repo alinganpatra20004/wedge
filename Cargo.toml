@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+
+[workspace]
+resolver = "2"
+members = ["crates/webmaster-core", "crates/webmaster-config", "crates/webmaster"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+authors = ["Alingan Patra"]
+repository = "https://github.com/alinganpatra20004/webmaster"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
