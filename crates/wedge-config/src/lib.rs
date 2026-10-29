@@ -16,6 +16,7 @@
 mod merge;
 mod model;
 mod schema;
+mod secret;
 
 use std::fs;
 use std::io::Read;
@@ -23,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 pub use model::{Config, ServerConfig, VirtualHost};
 pub use schema::json_schema;
+pub use secret::{Secret, SecretError, SecretRef, MAX_SECRET_SIZE};
 
 /// Largest configuration file accepted, in bytes. Guards against accidental or
 /// hostile huge inputs.

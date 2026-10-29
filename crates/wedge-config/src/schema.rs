@@ -34,15 +34,7 @@ pub(crate) fn validate(table: &toml::Table) -> Result<(), ConfigError> {
     })?;
     let errors: Vec<String> = validator()?
         .iter_errors(&instance)
-        .map(|e| {
-            let path = e.instance_path.to_string();
-            let path = if path.is_empty() {
-                "/".to_owned()
-            } else {
-                path
-            };
-            format!("{path}: {e}")
-        })
+        .map(|e| describe(&e))
         .collect();
     if errors.is_empty() {
         Ok(())
@@ -51,9 +43,40 @@ pub(crate) fn validate(table: &toml::Table) -> Result<(), ConfigError> {
     }
 }
 
+/// Formats one error as `<json-pointer>: <message>`. Pattern failures omit the
+/// offending value, because the field may hold a secret (see `SecretRef`).
+fn describe(e: &jsonschema::ValidationError<'_>) -> String {
+    let path = e.instance_path.to_string();
+    let path = if path.is_empty() {
+        "/".to_owned()
+    } else {
+        path
+    };
+    match &e.kind {
+        jsonschema::error::ValidationErrorKind::Pattern { pattern } => {
+            format!("{path}: value does not match the required format {pattern:?}")
+        }
+        _ => format!("{path}: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pattern_errors_do_not_echo_value() {
+        let schema = serde_json::json!({"properties": {"p": {"pattern": "^env:"}}});
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let instance = serde_json::json!({"p": "hunter2"});
+        let messages: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|e| describe(&e))
+            .collect();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].starts_with("/p: "), "{}", messages[0]);
+        assert!(!messages[0].contains("hunter2"), "{}", messages[0]);
+    }
 
     const SHIPPED: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
