@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Alingan Patra
 
-//! Core server types for wedge.
+//! Core server for wedge: listeners, connection handling and request routing.
+
+mod idle;
+mod response;
+mod server;
+
+pub use response::Body;
+pub use server::{Server, ServerError};
 
 /// Crate version, taken from Cargo metadata.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

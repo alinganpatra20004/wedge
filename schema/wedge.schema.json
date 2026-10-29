@@ -1,9 +1,92 @@
 {
   "$defs": {
+    "Limits": {
+      "additionalProperties": false,
+      "description": "Connection and request limits (`[server.limits]`). See the threat model,\nentries T2.5 to T2.8.",
+      "properties": {
+        "h2_max_concurrent_streams": {
+          "default": 100,
+          "description": "Maximum concurrent HTTP/2 streams per connection.",
+          "format": "uint32",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "header_timeout_secs": {
+          "default": 10,
+          "description": "Seconds allowed to receive a complete request head, including the wait\nfor the next request on a kept-alive connection.",
+          "format": "uint64",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "idle_timeout_secs": {
+          "default": 60,
+          "description": "Seconds a connection may go without any bytes read or written before it\nis closed. Covers clients that connect and never send a request.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_connections": {
+          "default": 1024,
+          "description": "Maximum simultaneous client connections across all listeners.",
+          "format": "uint",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_header_bytes": {
+          "default": 16384,
+          "description": "Maximum bytes buffered for an HTTP/1 request head, and maximum HTTP/2\nheader list size.",
+          "format": "uint",
+          "maximum": 1048576,
+          "minimum": 8192,
+          "type": "integer"
+        },
+        "max_headers": {
+          "default": 100,
+          "description": "Maximum number of request headers.",
+          "format": "uint",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_uri_bytes": {
+          "default": 8192,
+          "description": "Maximum request-target (URI) length in bytes.",
+          "format": "uint",
+          "maximum": 65536,
+          "minimum": 256,
+          "type": "integer"
+        },
+        "request_timeout_secs": {
+          "default": 30,
+          "description": "Seconds allowed for a handler to produce a response head.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "shutdown_grace_secs": {
+          "default": 30,
+          "description": "Seconds to let in-flight requests finish after a shutdown signal.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ServerConfig": {
       "additionalProperties": false,
       "description": "Process-wide server settings (`[server]`).",
       "properties": {
+        "limits": {
+          "$ref": "#/$defs/Limits",
+          "description": "Resource limits; the defaults are safe for an internet-facing server."
+        },
         "listen": {
           "default": [],
           "description": "Addresses to listen on, such as `\"0.0.0.0:80\"` or `\"[::]:443\"`.",

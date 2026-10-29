@@ -18,6 +18,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start the server.
+    Run {
+        /// Path to the master configuration file.
+        #[arg(short, long, default_value = "wedge.toml")]
+        config: PathBuf,
+    },
     /// Load and validate the configuration, then exit.
     CheckConfig {
         /// Path to the master configuration file.
@@ -30,6 +36,7 @@ enum Command {
 
 fn main() -> ExitCode {
     match Cli::parse().command {
+        Command::Run { config } => run(&config),
         Command::CheckConfig { config } => match wedge_config::load(&config) {
             Ok(cfg) => {
                 println!(
@@ -58,5 +65,79 @@ fn main() -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// Loads the configuration and serves until SIGINT or SIGTERM (Ctrl+C on Windows).
+fn run(config_path: &std::path::Path) -> ExitCode {
+    init_logging();
+    let config = match wedge_config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::error!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            tracing::error!(error = %e, "cannot start async runtime");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async {
+        let server = match wedge_core::Server::bind(&config).await {
+            Ok(server) => server,
+            Err(e) => {
+                tracing::error!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        for addr in server.local_addrs() {
+            tracing::info!(%addr, "listening");
+        }
+        server.run(shutdown_signal()).await;
+        ExitCode::SUCCESS
+    })
+}
+
+/// Logs to stderr. Filter with RUST_LOG (default info); JSON output with
+/// WEDGE_LOG_FORMAT=json.
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()));
+    if std::env::var("WEDGE_LOG_FORMAT").is_ok_and(|v| v == "json") {
+        builder.json().init();
+    } else {
+        builder.init();
+    }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
