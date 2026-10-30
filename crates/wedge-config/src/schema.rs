@@ -34,7 +34,7 @@ pub(crate) fn validate(table: &toml::Table) -> Result<(), ConfigError> {
     })?;
     let errors: Vec<String> = validator()?
         .iter_errors(&instance)
-        .map(|e| describe(&e))
+        .flat_map(|e| describe(&e))
         .collect();
     if errors.is_empty() {
         Ok(())
@@ -43,9 +43,12 @@ pub(crate) fn validate(table: &toml::Table) -> Result<(), ConfigError> {
     }
 }
 
-/// Formats one error as `<json-pointer>: <message>`. Pattern failures omit the
-/// offending value, because the field may hold a secret (see `SecretRef`).
-fn describe(e: &jsonschema::ValidationError<'_>) -> String {
+/// Formats one error as `<json-pointer>: <message>`. Messages never contain
+/// the offending value, because the field, or a table around it, may hold a
+/// pasted secret (see `SecretRef`). An optional table (`anyOf` with `null`)
+/// reports the errors inside the table instead.
+fn describe(e: &jsonschema::ValidationError<'_>) -> Vec<String> {
+    use jsonschema::error::ValidationErrorKind as Kind;
     let path = e.instance_path.to_string();
     let path = if path.is_empty() {
         "/".to_owned()
@@ -53,10 +56,22 @@ fn describe(e: &jsonschema::ValidationError<'_>) -> String {
         path
     };
     match &e.kind {
-        jsonschema::error::ValidationErrorKind::Pattern { pattern } => {
-            format!("{path}: value does not match the required format {pattern:?}")
+        Kind::Pattern { pattern } => {
+            vec![format!(
+                "{path}: value does not match the required format {pattern:?}"
+            )]
         }
-        _ => format!("{path}: {e}"),
+        Kind::AnyOf { context } => {
+            let only_type = |errors: &Vec<jsonschema::ValidationError<'_>>| {
+                errors.iter().all(|e| matches!(e.kind, Kind::Type { .. }))
+            };
+            let mut real = context.iter().filter(|branch| !only_type(branch));
+            match (real.next(), real.next()) {
+                (Some(branch), None) => branch.iter().flat_map(|e| describe(e)).collect(),
+                _ => vec![format!("{path}: {}", e.masked())],
+            }
+        }
+        _ => vec![format!("{path}: {}", e.masked())],
     }
 }
 
@@ -71,11 +86,41 @@ mod tests {
         let instance = serde_json::json!({"p": "hunter2"});
         let messages: Vec<String> = validator
             .iter_errors(&instance)
-            .map(|e| describe(&e))
+            .flat_map(|e| describe(&e))
             .collect();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].starts_with("/p: "), "{}", messages[0]);
         assert!(!messages[0].contains("hunter2"), "{}", messages[0]);
+    }
+
+    /// Type, enum and optional-table errors must not echo values either:
+    /// a misplaced secret can sit in any string or table.
+    #[test]
+    fn no_error_kind_echoes_values() {
+        let cases = [
+            "[server]\nlisten = \"hunter2\"\n",
+            "[server.tls]\nmin_version = \"hunter2\"\n",
+            "[[vhost]]\nname = \"a\"\nroot = \"/x\"\ntls = \"hunter2\"\n",
+            "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n[vhost.tls]\ncert = \"file:/c\"\nkey = \"hunter2\"\n",
+            "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n[vhost.tls]\nkey = \"hunter2\"\nextra = 1\n",
+        ];
+        for text in cases {
+            let table: toml::Table = text.parse().unwrap();
+            let Err(ConfigError::Schema { errors }) = validate(&table) else {
+                panic!("expected schema errors for {text}");
+            };
+            for message in &errors {
+                assert!(!message.contains("hunter2"), "{message}");
+            }
+        }
+        let table: toml::Table = cases[3].parse().unwrap();
+        let Err(ConfigError::Schema { errors }) = validate(&table) else {
+            unreachable!()
+        };
+        assert!(
+            errors.iter().any(|e| e.starts_with("/vhost/0/tls/key: ")),
+            "{errors:?}"
+        );
     }
 
     const SHIPPED: &str = concat!(

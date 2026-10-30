@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::SecretRef;
+
 /// Complete, merged server configuration.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +29,13 @@ pub struct ServerConfig {
     /// Addresses to listen on, such as `"0.0.0.0:80"` or `"[::]:443"`.
     #[serde(default)]
     pub listen: Vec<SocketAddr>,
+    /// Addresses that accept TLS connections, such as `"[::]:443"`. Needs at
+    /// least one vhost with a `[vhost.tls]` certificate.
+    #[serde(default)]
+    pub listen_tls: Vec<SocketAddr>,
+    /// TLS protocol settings shared by all TLS listeners.
+    #[serde(default)]
+    pub tls: TlsSettings,
     /// Name of the vhost that answers requests whose Host matches no vhost.
     /// When unset, such requests get 421 Misdirected Request.
     #[serde(default)]
@@ -89,6 +98,36 @@ impl Default for Limits {
     }
 }
 
+/// TLS protocol settings (`[server.tls]`). See the threat model, T3.1.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct TlsSettings {
+    /// Lowest TLS version offered. Versions below 1.2 are not supported.
+    pub min_version: TlsVersion,
+}
+
+/// A TLS protocol version.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum TlsVersion {
+    #[default]
+    #[serde(rename = "1.2")]
+    V1_2,
+    #[serde(rename = "1.3")]
+    V1_3,
+}
+
+/// A vhost's certificate (`[vhost.tls]`). Both values are secret references
+/// (`env:NAME` or `file:/path`); relative file paths are relative to the
+/// master configuration file.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VhostTls {
+    /// PEM certificate chain, leaf certificate first.
+    pub cert: SecretRef,
+    /// PEM private key (PKCS#8, PKCS#1 or SEC1).
+    pub key: SecretRef,
+}
+
 /// A virtual host (`[[vhost]]`).
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +145,10 @@ pub struct VirtualHost {
     /// `"*.example.com"` (any subdomain). Matching ignores case and port.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Certificate for TLS listeners. Without it, this vhost is not served on
+    /// TLS listeners.
+    #[serde(default)]
+    pub tls: Option<VhostTls>,
 }
 
 impl Config {
@@ -140,10 +183,13 @@ impl Config {
             }
         }
         let mut listen = HashSet::new();
-        for addr in &self.server.listen {
+        for addr in self.server.listen.iter().chain(&self.server.listen_tls) {
             if !listen.insert(addr) {
                 errors.push(format!("duplicate listen address {addr}"));
             }
+        }
+        if !self.server.listen_tls.is_empty() && self.vhost.iter().all(|v| v.tls.is_none()) {
+            errors.push("listen_tls is set but no vhost has a [vhost.tls] certificate".into());
         }
         errors
     }

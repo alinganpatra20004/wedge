@@ -60,16 +60,26 @@ impl Router {
         let Some(host) = request_host(uri, headers) else {
             return Route::BadHost;
         };
-        if let Some(&index) = self.exact.get(&host) {
-            return Route::Vhost(index);
+        self.lookup(&host)
+            .or(self.default)
+            .map_or(Route::Misdirected, Route::Vhost)
+    }
+
+    /// The vhost that claims `host` (lower case, no port), ignoring the default.
+    pub(crate) fn lookup(&self, host: &str) -> Option<usize> {
+        if let Some(&index) = self.exact.get(host) {
+            return Some(index);
         }
-        for (suffix, index) in &self.wildcards {
-            // "*.example.com" needs at least one label before the suffix.
-            if host.len() > suffix.len() && host.ends_with(suffix.as_str()) {
-                return Route::Vhost(*index);
-            }
-        }
-        self.default.map_or(Route::Misdirected, Route::Vhost)
+        // "*.example.com" needs at least one label before the suffix.
+        self.wildcards
+            .iter()
+            .find(|(suffix, _)| host.len() > suffix.len() && host.ends_with(suffix.as_str()))
+            .map(|&(_, index)| index)
+    }
+
+    /// The vhost for requests whose host no vhost claims.
+    pub(crate) fn default_vhost(&self) -> Option<usize> {
+        self.default
     }
 }
 

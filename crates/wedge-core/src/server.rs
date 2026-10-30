@@ -6,7 +6,8 @@
 //! Limits enforced here (threat model T2.5 to T2.8): a global connection cap,
 //! a header read timeout, an idle timeout on the socket, header size and
 //! count caps, a URI length cap, a per-request timeout, and HTTP/2 stream and
-//! reset-flood limits.
+//! reset-flood limits. TLS listeners add a bounded handshake (T3.5) and the
+//! SNI/Host check (T3.4).
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -20,7 +21,8 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
-use hyper_util::server::graceful::GracefulShutdown;
+use hyper_util::server::graceful::{GracefulShutdown, Watcher};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use wedge_config::{Config, Limits};
@@ -28,6 +30,7 @@ use wedge_config::{Config, Limits};
 use crate::files::{self, Root};
 use crate::idle::IdleTimeout;
 use crate::response::{self, Body};
+use crate::tls::{Tls, TlsError};
 use crate::vhost::{Route, Router};
 
 /// Errors that stop the server.
@@ -47,11 +50,14 @@ pub enum ServerError {
         #[source]
         source: io::Error,
     },
+    #[error(transparent)]
+    Tls(#[from] TlsError),
 }
 
 /// A server with its listeners bound, ready to run.
 pub struct Server {
-    listeners: Vec<TcpListener>,
+    /// Each listener with whether it terminates TLS.
+    listeners: Vec<(TcpListener, bool)>,
     state: Arc<State>,
 }
 
@@ -60,20 +66,32 @@ struct State {
     limits: Limits,
     roots: Vec<Root>,
     router: Router,
+    tls: Option<Tls>,
+}
+
+/// Per-connection facts passed to every request on it.
+#[derive(Clone, Copy)]
+struct Conn {
+    peer: SocketAddr,
+    /// For TLS connections, the vhost whose certificate was served.
+    tls_vhost: Option<usize>,
 }
 
 impl Server {
-    /// Binds every configured listen address.
+    /// Loads certificates, then binds every configured listen address.
     pub async fn bind(config: &Config) -> Result<Self, ServerError> {
-        if config.server.listen.is_empty() {
+        if config.server.listen.is_empty() && config.server.listen_tls.is_empty() {
             return Err(ServerError::NoListeners);
         }
+        let tls = Tls::from_config(config)?;
         let mut listeners = Vec::new();
-        for &addr in &config.server.listen {
+        let plain = config.server.listen.iter().map(|a| (*a, false));
+        let secure = config.server.listen_tls.iter().map(|a| (*a, true));
+        for (addr, is_tls) in plain.chain(secure) {
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|source| ServerError::Bind { addr, source })?;
-            listeners.push(listener);
+            listeners.push((listener, is_tls));
         }
         let mut roots = Vec::new();
         for vhost in &config.vhost {
@@ -94,15 +112,26 @@ impl Server {
                 limits: config.server.limits.clone(),
                 roots,
                 router: Router::new(config),
+                tls,
             }),
         })
     }
 
-    /// The bound addresses (useful when a port of 0 was requested).
+    /// The bound plain-HTTP addresses (useful when a port of 0 was requested).
     pub fn local_addrs(&self) -> Vec<SocketAddr> {
+        self.addrs(false)
+    }
+
+    /// The bound TLS addresses.
+    pub fn local_tls_addrs(&self) -> Vec<SocketAddr> {
+        self.addrs(true)
+    }
+
+    fn addrs(&self, tls: bool) -> Vec<SocketAddr> {
         self.listeners
             .iter()
-            .filter_map(|l| l.local_addr().ok())
+            .filter(|(_, is_tls)| *is_tls == tls)
+            .filter_map(|(l, _)| l.local_addr().ok())
             .collect()
     }
 
@@ -116,9 +145,10 @@ impl Server {
         let (stop_tx, stop_rx) = watch::channel(false);
 
         let mut accept_tasks = Vec::new();
-        for listener in self.listeners {
+        for (listener, is_tls) in self.listeners {
             accept_tasks.push(tokio::spawn(accept_loop(
                 listener,
+                is_tls,
                 Arc::clone(&self.state),
                 Arc::clone(&builder),
                 Arc::clone(&permits),
@@ -168,6 +198,7 @@ fn protocol_builder(limits: &Limits) -> Builder<TokioExecutor> {
 
 async fn accept_loop(
     listener: TcpListener,
+    is_tls: bool,
     state: Arc<State>,
     builder: Arc<Builder<TokioExecutor>>,
     permits: Arc<Semaphore>,
@@ -199,35 +230,73 @@ async fn accept_loop(
         };
         let _ = stream.set_nodelay(true);
         let idle = Duration::from_secs(state.limits.idle_timeout_secs);
+        let stream = IdleTimeout::new(stream, idle);
         let state = Arc::clone(&state);
-        let service = service_fn(move |req| {
-            let state = Arc::clone(&state);
-            async move { Ok::<_, Infallible>(handle(&state, req, peer).await) }
-        });
-        let conn = builder
-            .serve_connection(TokioIo::new(IdleTimeout::new(stream, idle)), service)
-            .into_owned();
-        let conn = graceful.watch(conn);
+        let builder = Arc::clone(&builder);
+        // Taken now, so shutdown also waits for connections still handshaking.
+        let watcher = graceful.watcher();
         tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::debug!(%peer, error = %e, "connection ended with error");
+            match (&state.tls, is_tls) {
+                (Some(tls), true) => {
+                    // T3.5: the handshake shares the request-head time budget.
+                    let budget = Duration::from_secs(state.limits.header_timeout_secs);
+                    match tokio::time::timeout(budget, tls.acceptor.accept(stream)).await {
+                        Ok(Ok(stream)) => {
+                            let tls_vhost = tls.vhost_for(stream.get_ref().1.server_name());
+                            let conn = Conn { peer, tls_vhost };
+                            serve(&builder, stream, &state, conn, watcher).await;
+                        }
+                        Ok(Err(e)) => tracing::debug!(%peer, error = %e, "TLS handshake failed"),
+                        Err(_) => tracing::debug!(%peer, "TLS handshake timed out"),
+                    }
+                }
+                _ => {
+                    let conn = Conn {
+                        peer,
+                        tls_vhost: None,
+                    };
+                    serve(&builder, stream, &state, conn, watcher).await;
+                }
             }
             drop(permit);
         });
     }
 }
 
+/// Runs HTTP/1 or HTTP/2 on one connection until it closes.
+async fn serve<I>(
+    builder: &Builder<TokioExecutor>,
+    io: I,
+    state: &Arc<State>,
+    conn: Conn,
+    watcher: Watcher,
+) where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let state = Arc::clone(state);
+    let service = service_fn(move |req| {
+        let state = Arc::clone(&state);
+        async move { Ok::<_, Infallible>(handle(&state, req, conn).await) }
+    });
+    let connection = builder
+        .serve_connection(TokioIo::new(io), service)
+        .into_owned();
+    if let Err(e) = watcher.watch(connection).await {
+        tracing::debug!(peer = %conn.peer, error = %e, "connection ended with error");
+    }
+}
+
 /// Handles one request and writes its access log line.
-async fn handle(state: &State, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
+async fn handle(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
     let started = std::time::Instant::now();
-    let entry = AccessEntry::new(&req, peer);
-    let response = respond(state, req).await;
+    let entry = AccessEntry::new(&req, conn);
+    let response = respond(state, req, conn).await;
     entry.log(&response, started.elapsed());
     response
 }
 
 /// Applies request-level limits, then routes the request.
-async fn respond(state: &State, req: Request<Incoming>) -> Response<Body> {
+async fn respond(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
     let limits = &state.limits;
     let uri_len = req.uri().path_and_query().map_or(0, |pq| pq.as_str().len());
     if uri_len > limits.max_uri_bytes {
@@ -248,21 +317,24 @@ async fn respond(state: &State, req: Request<Incoming>) -> Response<Body> {
         return close(response::status(StatusCode::PAYLOAD_TOO_LARGE));
     }
     let timeout = Duration::from_secs(limits.request_timeout_secs);
-    match tokio::time::timeout(timeout, route(state, req)).await {
+    match tokio::time::timeout(timeout, route(state, req, conn)).await {
         Ok(response) => response,
         Err(_) => response::status(StatusCode::SERVICE_UNAVAILABLE),
     }
 }
 
-/// Placeholder router: the static file handler arrives in task 2.2.
 /// Dispatches a request to the vhost chosen by its Host.
-async fn route(state: &State, req: Request<Incoming>) -> Response<Body> {
+async fn route(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
     match *req.method() {
         Method::GET | Method::HEAD => {
             if state.roots.is_empty() {
                 return response::status(StatusCode::NOT_FOUND);
             }
             match state.router.route(req.uri(), req.headers()) {
+                // T3.4: Host must name the vhost whose certificate was served.
+                Route::Vhost(index) if conn.tls_vhost.is_some_and(|t| t != index) => {
+                    response::status(StatusCode::MISDIRECTED_REQUEST)
+                }
                 Route::Vhost(index) => {
                     let root = &state.roots[index];
                     files::serve(root, req.method(), req.uri().path(), req.headers()).await
@@ -305,6 +377,7 @@ fn close(mut response: Response<Body>) -> Response<Body> {
 /// Only the path is logged, never the query string, which may carry tokens.
 struct AccessEntry {
     peer: SocketAddr,
+    tls: bool,
     method: String,
     path: String,
     version: hyper::Version,
@@ -313,7 +386,7 @@ struct AccessEntry {
 }
 
 impl AccessEntry {
-    fn new(req: &Request<Incoming>, peer: SocketAddr) -> Self {
+    fn new(req: &Request<Incoming>, conn: Conn) -> Self {
         let header = |name| {
             req.headers()
                 .get(name)
@@ -323,7 +396,8 @@ impl AccessEntry {
                 .unwrap_or_default()
         };
         Self {
-            peer,
+            peer: conn.peer,
+            tls: conn.tls_vhost.is_some(),
             method: escape(req.method().as_str()),
             path: escape(req.uri().path()),
             version: req.version(),
@@ -341,6 +415,7 @@ impl AccessEntry {
         tracing::info!(
             target: "wedge::access",
             peer = %self.peer,
+            tls = self.tls,
             method = %self.method,
             path = %self.path,
             version = ?self.version,

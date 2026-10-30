@@ -99,6 +99,9 @@ fn run(config_path: &std::path::Path) -> ExitCode {
         for addr in server.local_addrs() {
             tracing::info!(%addr, "listening");
         }
+        for addr in server.local_tls_addrs() {
+            tracing::info!(%addr, "listening (TLS)");
+        }
         server.run(shutdown_signal()).await;
         ExitCode::SUCCESS
     })

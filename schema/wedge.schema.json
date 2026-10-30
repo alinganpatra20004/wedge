@@ -79,6 +79,11 @@
       },
       "type": "object"
     },
+    "SecretRef": {
+      "description": "Secret reference: \"env:NAME\" or \"file:/path\". Inline values are not allowed.",
+      "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:.+)$",
+      "type": "string"
+    },
     "ServerConfig": {
       "additionalProperties": false,
       "description": "Process-wide server settings (`[server]`).",
@@ -102,8 +107,58 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "listen_tls": {
+          "default": [],
+          "description": "Addresses that accept TLS connections, such as `\"[::]:443\"`. Needs at\nleast one vhost with a `[vhost.tls]` certificate.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tls": {
+          "$ref": "#/$defs/TlsSettings",
+          "description": "TLS protocol settings shared by all TLS listeners."
         }
       },
+      "type": "object"
+    },
+    "TlsSettings": {
+      "additionalProperties": false,
+      "description": "TLS protocol settings (`[server.tls]`). See the threat model, T3.1.",
+      "properties": {
+        "min_version": {
+          "$ref": "#/$defs/TlsVersion",
+          "description": "Lowest TLS version offered. Versions below 1.2 are not supported."
+        }
+      },
+      "type": "object"
+    },
+    "TlsVersion": {
+      "description": "A TLS protocol version.",
+      "enum": [
+        "1.2",
+        "1.3"
+      ],
+      "type": "string"
+    },
+    "VhostTls": {
+      "additionalProperties": false,
+      "description": "A vhost's certificate (`[vhost.tls]`). Both values are secret references\n(`env:NAME` or `file:/path`); relative file paths are relative to the\nmaster configuration file.",
+      "properties": {
+        "cert": {
+          "$ref": "#/$defs/SecretRef",
+          "description": "PEM certificate chain, leaf certificate first."
+        },
+        "key": {
+          "$ref": "#/$defs/SecretRef",
+          "description": "PEM private key (PKCS#8, PKCS#1 or SEC1)."
+        }
+      },
+      "required": [
+        "cert",
+        "key"
+      ],
       "type": "object"
     },
     "VirtualHost": {
@@ -132,6 +187,17 @@
         "root": {
           "description": "Directory served for this host.",
           "type": "string"
+        },
+        "tls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VhostTls"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Certificate for TLS listeners. Without it, this vhost is not served on\nTLS listeners."
         }
       },
       "required": [

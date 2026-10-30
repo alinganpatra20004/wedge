@@ -22,7 +22,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub use model::{Config, Limits, ServerConfig, VirtualHost};
+pub use model::{Config, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls, VirtualHost};
 pub use schema::json_schema;
 pub use secret::{Secret, SecretError, SecretRef, MAX_SECRET_SIZE};
 
@@ -80,6 +80,15 @@ pub fn load(master: &Path) -> Result<Config, ConfigError> {
     for vhost in &mut config.vhost {
         if vhost.root.is_relative() {
             vhost.root = base.join(&vhost.root);
+        }
+        if let Some(tls) = &mut vhost.tls {
+            for reference in [&mut tls.cert, &mut tls.key] {
+                if let SecretRef::File(path) = reference {
+                    if path.is_relative() {
+                        *path = base.join(&*path);
+                    }
+                }
+            }
         }
     }
     Ok(config)
@@ -342,6 +351,46 @@ root = \"www\"
         let dir = tempfile::tempdir().unwrap();
         let err = load(&dir.path().join("absent.toml")).unwrap_err();
         assert!(matches!(err, ConfigError::Io { .. }));
+    }
+
+    #[test]
+    fn tls_settings_and_relative_cert_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let master = write(
+            dir.path(),
+            "wedge.toml",
+            "[server]\nlisten_tls = [\"127.0.0.1:8443\"]\n[server.tls]\nmin_version = \"1.3\"\n\
+             [[vhost]]\nname = \"a\"\nroot = \"www\"\n\
+             [vhost.tls]\ncert = \"file:certs/a.pem\"\nkey = \"env:A_KEY\"\n",
+        );
+        let cfg = load(&master).unwrap();
+        assert_eq!(cfg.server.tls.min_version, TlsVersion::V1_3);
+        let tls = cfg.vhost[0].tls.as_ref().unwrap();
+        assert_eq!(tls.cert, SecretRef::File(dir.path().join("certs/a.pem")));
+        assert_eq!(tls.key, SecretRef::Env("A_KEY".into()));
+    }
+
+    #[test]
+    fn tls_rules() {
+        let vhost = "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n";
+        let no_cert = format!("[server]\nlisten_tls = [\"127.0.0.1:8443\"]\n{vhost}");
+        let err = from_str(&no_cert).unwrap_err().to_string();
+        assert!(err.contains("no vhost has a [vhost.tls]"), "{err}");
+        let shared = format!(
+            "[server]\nlisten = [\"127.0.0.1:8443\"]\nlisten_tls = [\"127.0.0.1:8443\"]\n{vhost}\
+             [vhost.tls]\ncert = \"file:/c\"\nkey = \"file:/k\"\n"
+        );
+        let err = from_str(&shared).unwrap_err().to_string();
+        assert!(err.contains("duplicate listen address"), "{err}");
+        for bad in [
+            "[server.tls]\nmin_version = \"1.1\"\n",
+            "[[vhost]]\nname = \"a\"\nroot = \"/x\"\n[vhost.tls]\ncert = \"file:/c\"\n\
+             key = \"-----BEGIN PRIVATE KEY-----\"\n",
+        ] {
+            let err = from_str(bad).unwrap_err();
+            assert!(matches!(err, ConfigError::Schema { .. }), "{err}");
+            assert!(!err.to_string().contains("BEGIN PRIVATE"), "{err}");
+        }
     }
 
     #[test]
