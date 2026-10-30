@@ -20,6 +20,78 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub vhost: Vec<VirtualHost>,
+    #[serde(default)]
+    pub upstream: Vec<Upstream>,
+}
+
+/// A group of backend servers for the reverse proxy (`[[upstream]]`).
+/// See the threat model, Phase 4.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Upstream {
+    /// Name that `[[vhost.proxy]]` routes refer to.
+    #[schemars(length(min = 1, max = 253))]
+    pub name: String,
+    /// Backend addresses as IP:port (no host names, so no DNS rebinding,
+    /// T4.3). Requests go to healthy servers in turn.
+    #[schemars(length(min = 1))]
+    pub servers: Vec<SocketAddr>,
+    /// Seconds allowed to open a TCP connection to a server.
+    #[serde(default = "default_connect_timeout")]
+    #[schemars(range(min = 1, max = 300))]
+    pub connect_timeout_secs: u64,
+    /// Seconds allowed for a server to send its response head.
+    #[serde(default = "default_response_timeout")]
+    #[schemars(range(min = 1, max = 3600))]
+    pub response_timeout_secs: u64,
+    /// Path probed with GET to check each server, such as `"/healthz"`.
+    /// Without it, servers are only marked down when connections fail.
+    #[serde(default)]
+    pub health_path: Option<String>,
+    /// Seconds between health checks.
+    #[serde(default = "default_health_interval")]
+    #[schemars(range(min = 1, max = 3600))]
+    pub health_interval_secs: u64,
+    /// Consecutive failures (checks or connection errors) that mark a server
+    /// down. One success marks it up again.
+    #[serde(default = "default_unhealthy_after")]
+    #[schemars(range(min = 1, max = 100))]
+    pub unhealthy_after: u32,
+}
+
+fn default_connect_timeout() -> u64 {
+    5
+}
+
+fn default_response_timeout() -> u64 {
+    30
+}
+
+fn default_health_interval() -> u64 {
+    10
+}
+
+fn default_unhealthy_after() -> u32 {
+    2
+}
+
+/// Sends requests under a path prefix to an upstream (`[[vhost.proxy]]`).
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyRoute {
+    /// Path prefix starting with `/`, such as `"/api/"`. `"/api"` matches
+    /// `/api` and `/api/...` but not `/apix`. The longest prefix wins.
+    pub path: String,
+    /// Name of the `[[upstream]]` that serves this route.
+    pub upstream: String,
+    /// Largest request body accepted, in bytes (T4.7).
+    #[serde(default = "default_max_body")]
+    #[schemars(range(min = 0, max = 4_294_967_296_u64))]
+    pub max_body_bytes: u64,
+}
+
+fn default_max_body() -> u64 {
+    10 * 1024 * 1024
 }
 
 /// Process-wide server settings (`[server]`).
@@ -172,8 +244,13 @@ pub struct VirtualHost {
     /// Unique name used in logs and diagnostics.
     #[schemars(length(min = 1, max = 253))]
     pub name: String,
-    /// Directory served for this host.
-    pub root: PathBuf,
+    /// Directory served for this host. Optional when the vhost has proxy
+    /// routes; requests that match no route then get 404.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
+    /// Reverse proxy routes, checked before static files.
+    #[serde(default)]
+    pub proxy: Vec<ProxyRoute>,
     /// Serve files reached through symbolic links. Off by default; even when
     /// on, the resolved file must still lie inside `root`.
     #[serde(default)]
@@ -202,8 +279,36 @@ impl Config {
             if !seen.insert(vhost.name.as_str()) {
                 errors.push(format!("duplicate vhost name {:?}", vhost.name));
             }
-            if vhost.root.as_os_str().is_empty() {
-                errors.push(format!("vhost {:?}: root must not be empty", vhost.name));
+            match &vhost.root {
+                Some(root) if root.as_os_str().is_empty() => {
+                    errors.push(format!("vhost {:?}: root must not be empty", vhost.name));
+                }
+                None if vhost.proxy.is_empty() => errors.push(format!(
+                    "vhost {:?}: needs a root, a [[vhost.proxy]] route, or both",
+                    vhost.name
+                )),
+                _ => {}
+            }
+            let mut prefixes = HashSet::new();
+            for route in &vhost.proxy {
+                if !valid_route_prefix(&route.path) {
+                    errors.push(format!(
+                        "vhost {:?}: proxy path {:?} must start with '/' and contain no \
+                         empty, '.' or '..' segments, '%', '\\', '?' or '#'",
+                        vhost.name, route.path
+                    ));
+                } else if !prefixes.insert(route.path.trim_end_matches('/')) {
+                    errors.push(format!(
+                        "vhost {:?}: proxy path {:?} is listed twice",
+                        vhost.name, route.path
+                    ));
+                }
+                if !self.upstream.iter().any(|u| u.name == route.upstream) {
+                    errors.push(format!(
+                        "vhost {:?}: proxy upstream {:?} is not defined",
+                        vhost.name, route.upstream
+                    ));
+                }
             }
             for (name, value) in &vhost.headers {
                 if let Some(problem) = header_problem(name, value) {
@@ -249,8 +354,71 @@ impl Config {
         if !self.server.listen_tls.is_empty() && self.vhost.iter().all(|v| v.tls.is_none()) {
             errors.push("listen_tls is set but no vhost has a [vhost.tls] certificate".into());
         }
+        let mut names = HashSet::new();
+        for upstream in &self.upstream {
+            if !names.insert(upstream.name.as_str()) {
+                errors.push(format!("duplicate upstream name {:?}", upstream.name));
+            }
+            for addr in &upstream.servers {
+                if let Some(problem) = upstream_addr_problem(addr) {
+                    errors.push(format!(
+                        "upstream {:?}: server {addr}: {problem}",
+                        upstream.name
+                    ));
+                }
+            }
+            if let Some(path) = &upstream.health_path {
+                let valid = path.starts_with('/')
+                    && path.len() <= 1024
+                    && path
+                        .bytes()
+                        .all(|b| (b'!'..=b'~').contains(&b) && b != b'#');
+                if !valid {
+                    errors.push(format!(
+                        "upstream {:?}: health_path must start with '/' and contain only \
+                         visible ASCII",
+                        upstream.name
+                    ));
+                }
+            }
+        }
         errors
     }
+}
+
+/// A proxy route prefix: starts with `/`, and has no empty (except a final
+/// `/`), `.` or `..` segments and no characters that would make matching
+/// ambiguous against encoded request paths (T4.13).
+fn valid_route_prefix(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    path.len() <= 1024
+        && path
+            .bytes()
+            .all(|b| (b'!'..=b'~').contains(&b) && !matches!(b, b'%' | b'\\' | b'?' | b'#'))
+        && (rest.is_empty() || rest.split('/').all(|s| !matches!(s, "" | "." | "..")))
+}
+
+/// Why an upstream address is unusable (T4.2), if it is.
+fn upstream_addr_problem(addr: &SocketAddr) -> Option<&'static str> {
+    let ip = addr.ip();
+    if addr.port() == 0 {
+        return Some("port 0 is not a server port");
+    }
+    if ip.is_unspecified() {
+        return Some("unspecified address (0.0.0.0 or ::) is not a server");
+    }
+    if ip.is_multicast() {
+        return Some("multicast address is not a server");
+    }
+    if let std::net::IpAddr::V4(v4) = ip {
+        if v4.is_broadcast() {
+            return Some("broadcast address is not a server");
+        }
+    }
+    None
 }
 
 /// Why a `[vhost.headers]` entry is unusable, if it is. Names must be RFC 9110

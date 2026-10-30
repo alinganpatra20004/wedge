@@ -18,8 +18,8 @@ bytes = "1.12.1"
 futures-util = "0.3.34"
 http-body-util = "0.1.5"
 httpdate = "1.0.3"
-hyper = { version = "1.12.0", features = ["server", "http1", "http2"] }
-hyper-util = { version = "0.1.20", features = ["tokio", "server", "server-auto", "server-graceful", "http1", "http2"] }
+hyper = { version = "1.12.0", features = ["server", "http1", "http2", "client"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "server", "server-auto", "server-graceful", "http1", "http2", "client-legacy"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
 thiserror = "2.0.21"

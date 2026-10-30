@@ -80,8 +80,10 @@ pub fn load(master: &Path) -> Result<Config, ConfigError> {
     // working directory, so a config behaves the same wherever wedge starts.
     let base = master.parent().unwrap_or_else(|| Path::new("."));
     for vhost in &mut config.vhost {
-        if vhost.root.is_relative() {
-            vhost.root = base.join(&vhost.root);
+        if let Some(root) = &mut vhost.root {
+            if root.is_relative() {
+                *root = base.join(&*root);
+            }
         }
         if let Some(tls) = &mut vhost.tls {
             for reference in [&mut tls.cert, &mut tls.key] {
@@ -218,7 +220,7 @@ root = \"www\"
 ",
         );
         let cfg = load(&master).unwrap();
-        assert_eq!(cfg.vhost[0].root, dir.path().join("www"));
+        assert_eq!(cfg.vhost[0].root, Some(dir.path().join("www")));
     }
 
     #[test]
@@ -393,6 +395,65 @@ root = \"www\"
             assert!(matches!(err, ConfigError::Schema { .. }), "{err}");
             assert!(!err.to_string().contains("BEGIN PRIVATE"), "{err}");
         }
+    }
+
+    #[test]
+    fn proxy_and_upstream_rules() {
+        let upstream = "[[upstream]]\nname = \"app\"\nservers = [\"127.0.0.1:3000\"]\n";
+        let good = format!(
+            "{upstream}[[vhost]]\nname = \"api\"\n\
+             [[vhost.proxy]]\npath = \"/api/\"\nupstream = \"app\"\n"
+        );
+        let cfg = from_str(&good).unwrap();
+        assert_eq!(cfg.vhost[0].root, None);
+        assert_eq!(cfg.vhost[0].proxy[0].max_body_bytes, 10 * 1024 * 1024);
+        assert_eq!(cfg.upstream[0].connect_timeout_secs, 5);
+
+        let cases = [
+            ("[[vhost]]\nname = \"a\"\n", "needs a root"),
+            (
+                "[[vhost]]\nname = \"a\"\n[[vhost.proxy]]\npath = \"/x\"\nupstream = \"nope\"\n",
+                "is not defined",
+            ),
+            (
+                "[[upstream]]\nname = \"u\"\nservers = [\"0.0.0.0:80\"]\n",
+                "unspecified",
+            ),
+            (
+                "[[upstream]]\nname = \"u\"\nservers = [\"224.0.0.1:80\"]\n",
+                "multicast",
+            ),
+            (
+                "[[upstream]]\nname = \"u\"\nservers = [\"10.0.0.1:0\"]\n",
+                "port 0",
+            ),
+            (
+                "[[upstream]]\nname = \"u\"\nservers = [\"10.0.0.1:1\"]\n\
+                 [[upstream]]\nname = \"u\"\nservers = [\"10.0.0.2:1\"]\n",
+                "duplicate upstream",
+            ),
+            (
+                "[[upstream]]\nname = \"u\"\nservers = [\"10.0.0.1:1\"]\nhealth_path = \"x y\"\n",
+                "health_path",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = from_str(text).unwrap_err().to_string();
+            assert!(err.contains(expected), "{text}\n=> {err}");
+        }
+        for bad in [
+            "api", "/a//b", "/a/../b", "/./a", "/a%2f", "/a\\b", "/a?b", "/a b",
+        ] {
+            let text = format!(
+                "{upstream}[[vhost]]\nname = \"a\"\n\
+                 [[vhost.proxy]]\npath = {bad:?}\nupstream = \"app\"\n"
+            );
+            let err = from_str(&text).unwrap_err().to_string();
+            assert!(err.contains("proxy path"), "{bad}: {err}");
+        }
+        // Hostnames are refused by the schema/decoder: IP:port only (T4.3).
+        let named = "[[upstream]]\nname = \"u\"\nservers = [\"app.internal:80\"]\n";
+        assert!(from_str(named).is_err());
     }
 
     #[test]

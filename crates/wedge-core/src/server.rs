@@ -30,6 +30,7 @@ use wedge_config::{Config, Limits};
 use crate::files::{self, Root};
 use crate::headers::Policy;
 use crate::idle::IdleTimeout;
+use crate::proxy::Proxy;
 use crate::response::{self, Body};
 use crate::tls::{Tls, TlsError};
 use crate::vhost::{request_host, Route, Router};
@@ -67,10 +68,12 @@ pub struct Server {
 /// Shared, read-only state for all connections.
 struct State {
     limits: Limits,
-    roots: Vec<Root>,
+    /// Indexed like the configured vhosts; `None` for proxy-only vhosts.
+    roots: Vec<Option<Root>>,
     router: Router,
     tls: Option<Tls>,
     headers: Policy,
+    proxy: Proxy,
 }
 
 /// Per-connection facts passed to every request on it.
@@ -99,16 +102,20 @@ impl Server {
         }
         let mut roots = Vec::new();
         for vhost in &config.vhost {
-            let dir = tokio::fs::canonicalize(&vhost.root)
+            let Some(root) = &vhost.root else {
+                roots.push(None);
+                continue;
+            };
+            let dir = tokio::fs::canonicalize(root)
                 .await
                 .map_err(|source| ServerError::Root {
                     vhost: vhost.name.clone(),
                     source,
                 })?;
-            roots.push(Root {
+            roots.push(Some(Root {
                 dir,
                 follow_symlinks: vhost.follow_symlinks,
-            });
+            }));
         }
         let mut headers = Policy::new(config).map_err(ServerError::Headers)?;
         let first_tls_port = listeners
@@ -127,6 +134,7 @@ impl Server {
                 router: Router::new(config),
                 tls,
                 headers,
+                proxy: Proxy::new(config),
             }),
         })
     }
@@ -157,6 +165,7 @@ impl Server {
         let graceful = Arc::new(GracefulShutdown::new());
         let builder = Arc::new(protocol_builder(limits));
         let (stop_tx, stop_rx) = watch::channel(false);
+        self.state.proxy.spawn_health_checks(&stop_rx);
 
         let mut accept_tasks = Vec::new();
         for (listener, is_tls) in self.listeners {
@@ -322,20 +331,6 @@ async fn respond(
     if uri_len > limits.max_uri_bytes {
         return (response::status(StatusCode::URI_TOO_LONG), None);
     }
-    // No route accepts a request body yet (T2.7). Rejecting any
-    // Transfer-Encoding also defeats CL.TE / TE.CL smuggling, because hyper
-    // drops Content-Length when both are sent (T2.9). Phase 4 (proxy) relaxes
-    // this per route.
-    let headers = req.headers();
-    let has_body = headers
-        .get(hyper::header::CONTENT_LENGTH)
-        .is_some_and(|v| v.as_bytes() != b"0");
-    if headers.contains_key(hyper::header::TRANSFER_ENCODING) {
-        return (close(response::status(StatusCode::BAD_REQUEST)), None);
-    }
-    if has_body {
-        return (close(response::status(StatusCode::PAYLOAD_TOO_LARGE)), None);
-    }
     let timeout = Duration::from_secs(limits.request_timeout_secs);
     match tokio::time::timeout(timeout, route(state, req, conn)).await {
         Ok(routed) => routed,
@@ -343,44 +338,78 @@ async fn respond(
     }
 }
 
-/// Dispatches a request to the vhost chosen by its Host.
+/// Dispatches a request: Host picks the vhost, then a proxy route or the
+/// static file handler answers.
 async fn route(
     state: &State,
     req: Request<Incoming>,
     conn: Conn,
 ) -> (Response<Body>, Option<usize>) {
-    match *req.method() {
-        Method::GET | Method::HEAD => {
-            if state.roots.is_empty() {
-                return (response::status(StatusCode::NOT_FOUND), None);
+    let headers = req.headers();
+    let has_body = headers.contains_key(hyper::header::TRANSFER_ENCODING)
+        || headers
+            .get(hyper::header::CONTENT_LENGTH)
+            .is_some_and(|v| v.as_bytes() != b"0");
+    // An unread body must not be parsed as the next request.
+    let finish = |response| if has_body { close(response) } else { response };
+    let misdirected = || {
+        let response = finish(response::status(StatusCode::MISDIRECTED_REQUEST));
+        (response, None)
+    };
+    // With no vhosts configured every request gets a static-route answer
+    // (404, 405 or 413) without Host routing.
+    let index = if state.roots.is_empty() {
+        None
+    } else {
+        match state.router.route(req.uri(), req.headers()) {
+            // T3.4: Host must name the vhost whose certificate was served.
+            Route::Vhost(index) if conn.tls_vhost.is_some_and(|t| t != index) => {
+                return misdirected();
             }
-            match state.router.route(req.uri(), req.headers()) {
-                // T3.4: Host must name the vhost whose certificate was served.
-                Route::Vhost(index) if conn.tls_vhost.is_some_and(|t| t != index) => {
-                    (response::status(StatusCode::MISDIRECTED_REQUEST), None)
-                }
-                Route::Vhost(index) => {
-                    if conn.tls_vhost.is_none() {
-                        let host = request_host(req.uri(), req.headers());
-                        let redirect = state.headers.https_redirect(
-                            &state.router,
-                            index,
-                            host.as_deref(),
-                            req.uri(),
-                        );
-                        if let Some(redirect) = redirect {
-                            return (redirect, Some(index));
-                        }
-                    }
-                    let root = &state.roots[index];
-                    let response =
-                        files::serve(root, req.method(), req.uri().path(), req.headers()).await;
-                    (response, Some(index))
-                }
-                Route::Misdirected => (response::status(StatusCode::MISDIRECTED_REQUEST), None),
-                Route::BadHost => (close(response::status(StatusCode::BAD_REQUEST)), None),
+            Route::Vhost(index) => Some(index),
+            Route::Misdirected => return misdirected(),
+            Route::BadHost => return (close(response::status(StatusCode::BAD_REQUEST)), None),
+        }
+    };
+    if let Some(index) = index {
+        if conn.tls_vhost.is_none() {
+            let host = request_host(req.uri(), req.headers());
+            let redirect =
+                state
+                    .headers
+                    .https_redirect(&state.router, index, host.as_deref(), req.uri());
+            if let Some(redirect) = redirect {
+                return (finish(redirect), Some(index));
             }
         }
+        if let Some(proxy_route) = state.proxy.route(index, req.uri().path()) {
+            // T4.1: no tunnels; TRACE would echo credentials back (XST).
+            if matches!(*req.method(), Method::CONNECT | Method::TRACE) {
+                let response = finish(response::status(StatusCode::METHOD_NOT_ALLOWED));
+                return (response, Some(index));
+            }
+            let response = state.proxy.forward(proxy_route, req, conn.peer).await;
+            return (response, Some(index));
+        }
+    }
+    // Static routes take no body (T2.7). Rejecting any Transfer-Encoding also
+    // defeats CL.TE / TE.CL smuggling, because hyper drops Content-Length when
+    // both are sent (T2.9).
+    if headers.contains_key(hyper::header::TRANSFER_ENCODING) {
+        return (close(response::status(StatusCode::BAD_REQUEST)), index);
+    }
+    if has_body {
+        return (
+            close(response::status(StatusCode::PAYLOAD_TOO_LARGE)),
+            index,
+        );
+    }
+    let root = index.and_then(|i| state.roots[i].as_ref());
+    let response = match *req.method() {
+        Method::GET | Method::HEAD => match root {
+            Some(root) => files::serve(root, req.method(), req.uri().path(), req.headers()).await,
+            None => response::status(StatusCode::NOT_FOUND),
+        },
         Method::OPTIONS => {
             let mut response = Response::new(response::empty());
             *response.status_mut() = StatusCode::NO_CONTENT;
@@ -388,7 +417,7 @@ async fn route(
                 hyper::header::ALLOW,
                 hyper::header::HeaderValue::from_static("GET, HEAD, OPTIONS"),
             );
-            (response, None)
+            response
         }
         _ => {
             let mut response = response::status(StatusCode::METHOD_NOT_ALLOWED);
@@ -396,9 +425,10 @@ async fn route(
                 hyper::header::ALLOW,
                 hyper::header::HeaderValue::from_static("GET, HEAD, OPTIONS"),
             );
-            (response, None)
+            response
         }
-    }
+    };
+    (response, index)
 }
 
 /// Marks a response so the connection closes after it is sent, discarding

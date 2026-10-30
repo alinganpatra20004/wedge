@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Reverse proxy example. Rename to 30-proxy.toml to use it.
+# Upstream servers are IP:port only (no host names, so no DNS rebinding).
+
+[[upstream]]
+name = "app"
+servers = ["127.0.0.1:3000", "127.0.0.1:3001"]  # used in turn (round-robin)
+connect_timeout_secs = 5
+response_timeout_secs = 30
+health_path = "/healthz"     # GET every health_interval_secs; 2xx/3xx = healthy
+health_interval_secs = 10
+unhealthy_after = 2          # consecutive failures before a server is skipped
+
+[[vhost]]
+name = "api"
+hosts = ["api.localhost"]
+# No root: requests outside the proxy routes get 404.
+
+[[vhost.proxy]]
+path = "/v1/"                # matches /v1 and /v1/..., not /v1x
+upstream = "app"
+max_body_bytes = 1048576     # larger request bodies get 413

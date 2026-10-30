@@ -7,6 +7,7 @@ mod files;
 mod headers;
 mod idle;
 mod path;
+mod proxy;
 mod response;
 mod server;
 mod tls;

@@ -82,6 +82,24 @@ fn is_platform_special(segment: &str) -> bool {
         && stem.as_bytes()[3].is_ascii_digit())
 }
 
+/// Whether a raw request path may be forwarded to an upstream (T4.13). Each
+/// segment is decoded once; a `.` or `..` segment, an encoded `/` or `\`, a
+/// NUL or a bad escape would let the upstream resolve a path outside the
+/// route that wedge matched, so the request is refused. The raw path is
+/// forwarded unchanged when this passes.
+pub(crate) fn proxy_path_ok(raw: &str) -> bool {
+    let Some(rest) = raw.strip_prefix('/') else {
+        return false;
+    };
+    rest.split('/').all(|segment| {
+        percent_decode(segment.as_bytes()).is_some_and(|decoded| {
+            decoded != b"."
+                && decoded != b".."
+                && !decoded.iter().any(|b| matches!(b, b'/' | b'\\' | 0))
+        })
+    })
+}
+
 /// Decodes `%XX` escapes. Returns `None` for a truncated or non-hex escape.
 fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(input.len());
@@ -112,6 +130,39 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_paths() {
+        for ok in [
+            "/",
+            "/api/x",
+            "/api//x",
+            "/a%20b",
+            "/.well-known/x",
+            "/a.b/..c",
+            "/%e2%82%ac",
+        ] {
+            assert!(proxy_path_ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "api",
+            "/api/../admin",
+            "/api/./x",
+            "/api/%2e%2e/admin",
+            "/api/%2E%2e/admin",
+            "/api/.%2e/admin",
+            "/api/..",
+            "/api/a%2fb",
+            "/api/a%5cb",
+            "/api/a\\b",
+            "/api/%00",
+            "/api/%zz",
+            "/api/%2",
+        ] {
+            assert!(!proxy_path_ok(bad), "{bad}");
+        }
+    }
 
     fn ok(raw: &str) -> Vec<String> {
         parse(raw).unwrap().segments
