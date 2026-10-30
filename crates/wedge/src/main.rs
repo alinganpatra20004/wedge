@@ -105,7 +105,8 @@ fn run(config_path: &std::path::Path) -> ExitCode {
 }
 
 /// Logs to stderr. Filter with RUST_LOG (default info); JSON output with
-/// WEDGE_LOG_FORMAT=json.
+/// WEDGE_LOG_FORMAT=json. Access lines use target `wedge::access`, so
+/// `RUST_LOG=info,wedge::access=off` keeps only the error log.
 fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));

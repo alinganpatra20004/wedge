@@ -217,8 +217,17 @@ async fn accept_loop(
     }
 }
 
+/// Handles one request and writes its access log line.
+async fn handle(state: &State, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
+    let started = std::time::Instant::now();
+    let entry = AccessEntry::new(&req, peer);
+    let response = respond(state, req).await;
+    entry.log(&response, started.elapsed());
+    response
+}
+
 /// Applies request-level limits, then routes the request.
-async fn handle(state: &State, req: Request<Incoming>, _peer: SocketAddr) -> Response<Body> {
+async fn respond(state: &State, req: Request<Incoming>) -> Response<Body> {
     let limits = &state.limits;
     let uri_len = req.uri().path_and_query().map_or(0, |pq| pq.as_str().len());
     if uri_len > limits.max_uri_bytes {
@@ -290,4 +299,91 @@ fn close(mut response: Response<Body>) -> Response<Body> {
         hyper::header::HeaderValue::from_static("close"),
     );
     response
+}
+
+/// Request fields captured for the access log before the request is consumed.
+/// Only the path is logged, never the query string, which may carry tokens.
+struct AccessEntry {
+    peer: SocketAddr,
+    method: String,
+    path: String,
+    version: hyper::Version,
+    host: String,
+    user_agent: String,
+}
+
+impl AccessEntry {
+    fn new(req: &Request<Incoming>, peer: SocketAddr) -> Self {
+        let header = |name| {
+            req.headers()
+                .get(name)
+                .map(|v: &hyper::header::HeaderValue| {
+                    escape(&String::from_utf8_lossy(v.as_bytes()))
+                })
+                .unwrap_or_default()
+        };
+        Self {
+            peer,
+            method: escape(req.method().as_str()),
+            path: escape(req.uri().path()),
+            version: req.version(),
+            host: header(hyper::header::HOST),
+            user_agent: header(hyper::header::USER_AGENT),
+        }
+    }
+
+    fn log(&self, response: &Response<Body>, elapsed: Duration) {
+        let bytes = response
+            .headers()
+            .get(hyper::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-");
+        tracing::info!(
+            target: "wedge::access",
+            peer = %self.peer,
+            method = %self.method,
+            path = %self.path,
+            version = ?self.version,
+            host = %self.host,
+            status = response.status().as_u16(),
+            bytes,
+            duration_ms = elapsed.as_secs_f64() * 1000.0,
+            user_agent = %self.user_agent,
+        );
+    }
+}
+
+/// Makes untrusted text safe for a log line (threat model T2.14): control
+/// characters, quotes and backslashes become escapes, and the result is
+/// capped at 512 characters so one request cannot flood the log.
+fn escape(text: &str) -> String {
+    const MAX: usize = 512;
+    let mut out = String::with_capacity(text.len().min(MAX));
+    for c in text.chars() {
+        if out.len() >= MAX {
+            out.push_str("...");
+            break;
+        }
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape;
+
+    #[test]
+    fn escape_neutralizes_log_injection() {
+        assert_eq!(escape("/a\r\nFAKE 200"), "/a\\x0d\\x0aFAKE 200");
+        assert_eq!(escape("\x1b[31mred"), "\\x1b[31mred");
+        assert_eq!(escape("say \"hi\" \\"), "say \\\"hi\\\" \\\\");
+        assert!(escape(&"a".repeat(2000)).len() <= 515);
+        assert_eq!(escape("/café"), "/café");
+    }
 }

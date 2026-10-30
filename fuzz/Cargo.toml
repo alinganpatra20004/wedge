@@ -14,6 +14,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 wedge-config = { path = "../crates/wedge-config" }
+wedge-core = { path = "../crates/wedge-core" }
 
 # Keep the fuzz crate out of the main workspace.
 [workspace]
@@ -29,6 +30,13 @@ bench = false
 [[bin]]
 name = "secret_ref"
 path = "fuzz_targets/secret_ref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_path"
+path = "fuzz_targets/request_path.rs"
 test = false
 doc = false
 bench = false
