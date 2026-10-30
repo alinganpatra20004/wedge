@@ -150,8 +150,14 @@ async fn locate(root: &Root, segments: &[String]) -> Option<PathBuf> {
 fn redirect_to_slash(raw_path: &str) -> Response<Body> {
     // raw_path passed path::parse, so it has no CR/LF or other controls and
     // cannot inject headers; HeaderValue::from_str rejects them anyway.
+    // Empty and `.` segments are dropped: `//host/dir` would otherwise become
+    // a protocol-relative Location and redirect off-site (T2.11).
     let mut response = response::status(StatusCode::MOVED_PERMANENTLY);
-    if let Ok(location) = HeaderValue::from_str(&format!("{raw_path}/")) {
+    let path: Vec<&str> = raw_path
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    if let Ok(location) = HeaderValue::from_str(&format!("/{}/", path.join("/"))) {
         response.headers_mut().insert(header::LOCATION, location);
     }
     response

@@ -161,6 +161,15 @@ async fn directories_redirect_and_never_list() {
     let reply = get(&s, "/docs", "").await;
     assert_eq!(status(&reply), 301, "{reply}");
     assert_eq!(header(&reply, "location"), Some("/docs/"));
+    // A protocol-relative Location would send the client to host "docs".
+    for target in ["//docs", "///docs", "/.//docs"] {
+        let reply = get(&s, target, "").await;
+        assert_eq!(
+            header(&reply, "location"),
+            Some("/docs/"),
+            "{target}: {reply}"
+        );
+    }
     assert_eq!(body(&get(&s, "/docs/", "").await), "docs");
     assert_eq!(status(&get(&s, "/empty-dir/", "").await), 404);
 }
