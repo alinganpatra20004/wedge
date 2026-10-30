@@ -82,6 +82,36 @@ rustls with the ring provider is the only TLS stack.
 | T3.13 | Clickjacking, MIME sniffing, referrer leakage on served content | T, I | A05 / V14.4.3 to V14.4.7 | Default headers `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`; per-vhost `headers` table to add or override, for example a CSP; names and values validated at startup (no CR/LF) | verified (`security_headers_everywhere_and_hsts_only_over_tls`, `header_rules`); framing and computed headers are reserved |
 | T3.14 | Expired or soon-to-expire certificate causes an outage | D | A05 | Out of scope for 3.x: certificate expiry metric in Phase 5, renewal with ACME later | planned (Phase 5) |
 
+## Phase 4: Reverse proxy
+
+New trust boundary: server → upstreams. Upstream responses are semi-trusted:
+the operator chose the upstream, but the application behind it may be buggy or
+compromised. New capability: request bodies, which reach only proxy routes.
+
+Design: `[[upstream]]` groups list servers as IP:port values only; there is no
+DNS lookup at runtime. A vhost maps path prefixes to an upstream with
+`[[vhost.proxy]]`. wedge parses every request and builds a new one for the
+upstream with its HTTP client (HTTP/1.1, pooled connections), so raw client
+bytes never reach an upstream. Round-robin over healthy servers; active health
+checks (`GET <health_path>`) and passive marking on connect failure.
+Not in v1: TLS to upstreams, WebSocket/`Upgrade` tunnelling, HTTP/2 to
+upstreams.
+
+| # | Threat | STRIDE | OWASP / ASVS | Mitigation | Status |
+|---|---|---|---|---|---|
+| T4.1 | SSRF: client steers the proxy to an internal host (absolute-form target, `Host`, `CONNECT`, path tricks such as `//evil/` or `@`) | S, I | A10 / V5.2.6, V12.6.1 | Destination is fixed by config: IP:port per server, no DNS; the upstream URI is built from the configured address and the normalized path only; `CONNECT` and other methods outside the route's list get 405; `Host` only selects the vhost | planned |
+| T4.2 | Operator mistake points an upstream at cloud metadata or a non-unicast address | I | A10, A05 | Config rejects unspecified, multicast and broadcast addresses; startup warning for link-local (169.254.0.0/16, fe80::/10), which includes cloud metadata endpoints | planned |
+| T4.3 | DNS rebinding of upstream names | S | A10 | Upstreams are IP literals; no runtime resolution | planned |
+| T4.4 | Request smuggling / desync between wedge and the upstream (CL.TE, TE.CL, TE.TE, obs-fold, duplicate Content-Length) | T | A04 / V13.1 | hyper parses client framing strictly; ambiguous framing is rejected (T2.9); wedge re-serializes the request with its own framing; `Transfer-Encoding` from the client is never forwarded as a header | planned |
+| T4.5 | Hop-by-hop header abuse: `Connection: X-Forwarded-For` drops a security header before the upstream sees it; `Upgrade` or `TE` reach the upstream | T | A04, A05 / V13.1 | Remove `Connection`, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-Authorization` and every header named in `Connection`, in both directions, before adding wedge's own headers | planned |
+| T4.6 | Spoofed client identity: client sends its own `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP` or `Forwarded` to bypass IP allow-lists or forge the scheme | S | A01, A07 / V1.4, V13.1 | Those headers from the client are removed and replaced with values from the connection; an incoming `X-Forwarded-For` is kept and appended to only when the peer is in `server.trusted_proxies` | planned |
+| T4.7 | Body exhaustion: huge or endless uploads, slow uploads | D | A05 / V11.1.4, V13.1.3 | Bodies only on proxy routes; `max_body_bytes` per route (default 10 MiB) enforced while streaming (413); request timeout covers slow uploads | planned |
+| T4.8 | Slow or dead upstream ties up connections | D | A05 / V11.1.4 | Connect timeout, response-header timeout, idle timeout on response bodies; failures give 502/504; the connection cap still applies | planned |
+| T4.9 | Upstream errors leak internals (stack traces in 5xx bodies, upstream addresses in wedge's error pages) | I | A05 / V7.4.1 | wedge's own 502/503/504 bodies are generic and never name the upstream; upstream addresses appear only in logs; upstream bodies pass through unchanged (the application owns them) | planned |
+| T4.10 | Upstream response header injection or framing confusion reaching the client | T | A03, A04 | hyper parses the upstream response strictly; hop-by-hop headers are removed (T4.5); wedge re-frames the response | planned |
+| T4.11 | Health checks or retries amplify load or replay non-idempotent requests | D, T | A04 | Health checks use a fixed interval and timeout; a request is retried on another server only when the connection failed before any bytes were sent, and only for GET, HEAD and OPTIONS | planned |
+| T4.12 | Security headers from wedge clobber the application's own (for example a stricter CSP) | T | A05 / V14.4 | On proxied responses default security headers are added only when absent; headers set explicitly in `[vhost.headers]` still override; HSTS rules unchanged | planned |
+
 ## Residual risks and assumptions
 
 - The OS, filesystem permissions and the operator's account are trusted. wedge
