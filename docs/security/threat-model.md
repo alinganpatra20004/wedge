@@ -53,11 +53,44 @@ Trust boundaries:
 | T2.15 | Unbounded compression work (zip bomb on our side) | D | A05 | Compress only on-the-fly for files under a size cap and for compressible types; prefer pre-compressed `.br`/`.gz` | implemented: only pre-compressed `.br`/`.gz` variants are served; no on-the-fly compression |
 | T2.16 | Host header used for vhost routing is spoofed | S | A01 | Unknown Host → default vhost (explicitly configured) or 421; Host is never used to build file paths | verified (`vhost::tests`, `host_routing_over_the_wire`) |
 
+## Phase 3: TLS termination and security headers
+
+New trust boundary: the TLS handshake. Before it completes, wedge has only
+the ClientHello (SNI, ALPN, offered versions and cipher suites), all of it
+attacker-controlled. New asset: each vhost's private key.
+
+Design: TLS listeners are separate (`server.listen_tls`). Each vhost may carry
+`[vhost.tls]` with `cert` and `key` given as `env:`/`file:` references (never
+inline). A custom resolver picks the certificate from SNI using the same
+exact/wildcard rules as Host routing, falling back to the default vhost.
+rustls with the ring provider is the only TLS stack.
+
+| # | Threat | STRIDE | OWASP / ASVS | Mitigation | Status |
+|---|---|---|---|---|---|
+| T3.1 | Downgrade to TLS 1.0/1.1, SSLv3 or weak ciphers (POODLE, BEAST, SWEET32, RC4, export, RSA key exchange without forward secrecy) | I, T | A02 / V9.1.2, V9.1.3 | rustls implements only TLS 1.2 and 1.3, with AEAD suites and (EC)DHE key exchange only; `server.tls.min_version` (`"1.2"` default, `"1.3"` allowed) cannot go lower | planned |
+| T3.2 | Private key leaked through config, logs, errors or core dumps | I | A02, A05 / V6.4.1, V6.4.2 | Key only by `env:`/`file:` reference; the secret buffer is zeroized after parsing; errors name the reference, never the content; on Unix a warning if the key file is group- or world-readable; `panic = "abort"` | planned |
+| T3.3 | Wrong certificate served: SNI for vhost A returns B's certificate, or a vhost has no certificate covering its names | S | A02, A07 / V9.1.1 | Resolver is built from the same host table as the router; at startup each vhost's hosts are checked against its certificate's SAN (webpki); mismatches are startup warnings, and a key that does not match its certificate is a startup error | planned |
+| T3.4 | SNI/Host confusion (domain fronting, misrouting over a coalesced HTTP/2 connection): handshake for A, then `Host: B` | S, T | A01 / V9.1.1 | On TLS connections the vhost chosen by Host must be the vhost whose certificate was served; otherwise 421 Misdirected Request (RFC 9110 §15.5.20), which tells HTTP/2 clients to open a new connection | planned |
+| T3.5 | Handshake exhaustion: slow ClientHello, or many connections that never finish the handshake | D | A05 / V11.1.4 | Handshake bounded by `header_timeout_secs`; it runs inside the connection task, so the accept loop never blocks; it counts against `max_connections`; idle timeout applies to the raw socket | planned |
+| T3.6 | Malformed or oversized ClientHello or TLS records crash the server or exhaust memory | D | A06 / V5.1 | rustls (memory-safe; caps message sizes) parses all records; errors close only that connection and are logged at debug level, so floods do not flood the log | planned |
+| T3.7 | Cross-protocol attacks (ALPACA): a TLS connection meant for another service is accepted | S | A05 | ALPN `h2` and `http/1.1` only; a client offering ALPN with no overlap is refused with `no_application_protocol` | planned |
+| T3.8 | 0-RTT replay of early data | T | A04 | Early data disabled (rustls default `max_early_data_size = 0`); session tickets off; TLS 1.3 resumption uses a bounded in-memory session cache | planned |
+| T3.9 | TLS renegotiation and compression attacks (CRIME, renegotiation DoS) | I, D | A02 | Not implemented by rustls | planned |
+| T3.10 | Plaintext HTTP on the TLS port or TLS on the plaintext port | D | A05 | Handshake fails and the connection closes; covered by the handshake timeout | planned |
+| T3.11 | Protocol downgrade by an active attacker: user reaches `http://` and stays on it (SSL stripping) | T, I | A02, A05 / V9.1.1, V14.4.5 | HSTS on TLS responses (default `max-age=31536000`, configurable, never sent over plain HTTP as RFC 6797 requires); optional HTTP→HTTPS redirect per vhost | planned |
+| T3.12 | HTTPS redirect abused as an open redirect through a spoofed Host | T | A01 / V5.1.5 | The redirect host is the request host only if it matches one of the vhost's configured names; otherwise the vhost's first exact host; with neither, no redirect | planned |
+| T3.13 | Clickjacking, MIME sniffing, referrer leakage on served content | T, I | A05 / V14.4.3 to V14.4.7 | Default headers `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`; per-vhost `headers` table to add or override, for example a CSP; names and values validated at startup (no CR/LF) | planned |
+| T3.14 | Expired or soon-to-expire certificate causes an outage | D | A05 | Out of scope for 3.x: certificate expiry metric in Phase 5, renewal with ACME later | planned (Phase 5) |
+
 ## Residual risks and assumptions
 
 - The OS, filesystem permissions and the operator's account are trusted. wedge
   should run as an unprivileged user; packaging (Phase 6) will set this up.
 - Third-party crates (hyper, h2, rustls, tokio) are trusted but monitored with
   cargo-audit and cargo-deny on every push and weekly.
+- A private key stays in process memory while the server runs; rustls owns
+  that copy. Anyone who can read wedge's memory (root, a debugger, a core
+  dump) can read the key. Run wedge as a dedicated user with core dumps
+  disabled.
 - Phase 7 will test these mitigations against the built binary and record the
   results in `assessment-report.md`.
