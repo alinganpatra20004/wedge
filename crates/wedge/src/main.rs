@@ -40,9 +40,10 @@ fn main() -> ExitCode {
         Command::CheckConfig { config } => match wedge_config::load(&config) {
             Ok(cfg) => {
                 println!(
-                    "{}: OK ({} listener(s), {} vhost(s))",
+                    "{}: OK ({} listener(s), {} TLS listener(s), {} vhost(s))",
                     config.display(),
                     cfg.server.listen.len(),
+                    cfg.server.listen_tls.len(),
                     cfg.vhost.len()
                 );
                 ExitCode::SUCCESS

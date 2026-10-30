@@ -3,7 +3,7 @@
 
 //! Typed configuration model. Later phases extend these structs.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -126,7 +126,44 @@ pub struct VhostTls {
     pub cert: SecretRef,
     /// PEM private key (PKCS#8, PKCS#1 or SEC1).
     pub key: SecretRef,
+    /// `Strict-Transport-Security` max-age on TLS responses; 0 turns HSTS off.
+    #[serde(default = "default_hsts_max_age")]
+    #[schemars(range(min = 0, max = 63_072_000))]
+    pub hsts_max_age_secs: u64,
+    /// Add `includeSubDomains` to HSTS. Only enable when every subdomain
+    /// serves HTTPS.
+    #[serde(default)]
+    pub hsts_include_subdomains: bool,
+    /// Answer plain-HTTP requests for this vhost with a 308 redirect to the
+    /// first TLS listener.
+    #[serde(default)]
+    pub redirect_http: bool,
 }
+
+fn default_hsts_max_age() -> u64 {
+    31_536_000
+}
+
+/// Response headers that `[vhost.headers]` may not set, because wedge
+/// computes them or they control message framing.
+pub const RESERVED_HEADERS: &[&str] = &[
+    "connection",
+    "content-encoding",
+    "content-length",
+    "content-range",
+    "content-type",
+    "date",
+    "etag",
+    "keep-alive",
+    "last-modified",
+    "location",
+    "strict-transport-security",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "vary",
+];
 
 /// A virtual host (`[[vhost]]`).
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
@@ -145,6 +182,11 @@ pub struct VirtualHost {
     /// `"*.example.com"` (any subdomain). Matching ignores case and port.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Extra response headers, such as `"Content-Security-Policy"`. A value
+    /// replaces a default security header of the same name; an empty value
+    /// removes it.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
     /// Certificate for TLS listeners. Without it, this vhost is not served on
     /// TLS listeners.
     #[serde(default)]
@@ -162,6 +204,21 @@ impl Config {
             }
             if vhost.root.as_os_str().is_empty() {
                 errors.push(format!("vhost {:?}: root must not be empty", vhost.name));
+            }
+            for (name, value) in &vhost.headers {
+                if let Some(problem) = header_problem(name, value) {
+                    errors.push(format!(
+                        "vhost {:?}: header {name:?}: {problem}",
+                        vhost.name
+                    ));
+                }
+            }
+            let redirects = vhost.tls.as_ref().is_some_and(|t| t.redirect_http);
+            if redirects && self.server.listen_tls.is_empty() {
+                errors.push(format!(
+                    "vhost {:?}: redirect_http needs a listen_tls address",
+                    vhost.name
+                ));
             }
         }
         let mut hosts = HashSet::new();
@@ -184,7 +241,8 @@ impl Config {
         }
         let mut listen = HashSet::new();
         for addr in self.server.listen.iter().chain(&self.server.listen_tls) {
-            if !listen.insert(addr) {
+            // Port 0 asks the OS for a free port, so those never collide.
+            if addr.port() != 0 && !listen.insert(addr) {
                 errors.push(format!("duplicate listen address {addr}"));
             }
         }
@@ -193,6 +251,32 @@ impl Config {
         }
         errors
     }
+}
+
+/// Why a `[vhost.headers]` entry is unusable, if it is. Names must be RFC 9110
+/// tokens; values must be visible ASCII, spaces or tabs (no CR/LF injection).
+fn header_problem(name: &str, value: &str) -> Option<&'static str> {
+    const TCHAR: &[u8] = b"!#$%&'*+-.^_`|~";
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || TCHAR.contains(&b))
+    {
+        return Some("invalid header name");
+    }
+    if RESERVED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+        return Some("this header is managed by wedge and cannot be set");
+    }
+    if value.len() > 8192 {
+        return Some("value is longer than 8192 bytes");
+    }
+    if !value
+        .bytes()
+        .all(|b| b == b'\t' || (b' '..=b'~').contains(&b))
+    {
+        return Some("value may contain only visible ASCII, spaces and tabs");
+    }
+    None
 }
 
 /// A DNS name (letters, digits, hyphens, dots; labels 1 to 63 bytes), an IP
@@ -242,6 +326,27 @@ mod tests {
             "a.com:80",
         ] {
             assert!(!valid_host_pattern(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn header_rules() {
+        assert_eq!(
+            header_problem("Content-Security-Policy", "default-src 'self'"),
+            None
+        );
+        assert_eq!(header_problem("X-Frame-Options", ""), None);
+        for (name, value) in [
+            ("", "x"),
+            ("Bad Name", "x"),
+            ("X-A:", "x"),
+            ("X-A", "a\r\nSet-Cookie: x=1"),
+            ("X-A", "caf\u{e9}"),
+            ("Content-Length", "0"),
+            ("strict-transport-security", "max-age=0"),
+            ("Transfer-Encoding", "chunked"),
+        ] {
+            assert!(header_problem(name, value).is_some(), "{name:?}: {value:?}");
         }
     }
 }

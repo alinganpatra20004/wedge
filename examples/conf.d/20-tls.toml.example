@@ -19,3 +19,11 @@ hosts = ["localhost"]
 [vhost.tls]
 cert = "file:certs/localhost.crt"  # PEM chain, leaf first
 key = "file:certs/localhost.key"   # PEM PKCS#8, PKCS#1 or SEC1
+hsts_max_age_secs = 31536000       # 0 turns HSTS off; sent only over TLS
+hsts_include_subdomains = false
+redirect_http = false              # true: plain-HTTP requests get a 308 to https
+
+# Extra response headers. A value replaces a default security header
+# (X-Content-Type-Options, X-Frame-Options, Referrer-Policy); "" removes it.
+[vhost.headers]
+"Content-Security-Policy" = "default-src 'self'"

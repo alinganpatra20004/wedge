@@ -150,9 +150,27 @@
           "$ref": "#/$defs/SecretRef",
           "description": "PEM certificate chain, leaf certificate first."
         },
+        "hsts_include_subdomains": {
+          "default": false,
+          "description": "Add `includeSubDomains` to HSTS. Only enable when every subdomain\nserves HTTPS.",
+          "type": "boolean"
+        },
+        "hsts_max_age_secs": {
+          "default": 31536000,
+          "description": "`Strict-Transport-Security` max-age on TLS responses; 0 turns HSTS off.",
+          "format": "uint64",
+          "maximum": 63072000,
+          "minimum": 0,
+          "type": "integer"
+        },
         "key": {
           "$ref": "#/$defs/SecretRef",
           "description": "PEM private key (PKCS#8, PKCS#1 or SEC1)."
+        },
+        "redirect_http": {
+          "default": false,
+          "description": "Answer plain-HTTP requests for this vhost with a 308 redirect to the\nfirst TLS listener.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -169,6 +187,14 @@
           "default": false,
           "description": "Serve files reached through symbolic links. Off by default; even when\non, the resolved file must still lie inside `root`.",
           "type": "boolean"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Extra response headers, such as `\"Content-Security-Policy\"`. A value\nreplaces a default security header of the same name; an empty value\nremoves it.",
+          "type": "object"
         },
         "hosts": {
           "default": [],

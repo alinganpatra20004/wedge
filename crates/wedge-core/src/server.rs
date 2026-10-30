@@ -28,10 +28,11 @@ use tokio::sync::{watch, Semaphore};
 use wedge_config::{Config, Limits};
 
 use crate::files::{self, Root};
+use crate::headers::Policy;
 use crate::idle::IdleTimeout;
 use crate::response::{self, Body};
 use crate::tls::{Tls, TlsError};
-use crate::vhost::{Route, Router};
+use crate::vhost::{request_host, Route, Router};
 
 /// Errors that stop the server.
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +53,8 @@ pub enum ServerError {
     },
     #[error(transparent)]
     Tls(#[from] TlsError),
+    #[error("invalid response header configuration: {0}")]
+    Headers(String),
 }
 
 /// A server with its listeners bound, ready to run.
@@ -67,6 +70,7 @@ struct State {
     roots: Vec<Root>,
     router: Router,
     tls: Option<Tls>,
+    headers: Policy,
 }
 
 /// Per-connection facts passed to every request on it.
@@ -106,6 +110,15 @@ impl Server {
                 follow_symlinks: vhost.follow_symlinks,
             });
         }
+        let mut headers = Policy::new(config).map_err(ServerError::Headers)?;
+        let first_tls_port = listeners
+            .iter()
+            .find(|(_, is_tls)| *is_tls)
+            .and_then(|(l, _)| l.local_addr().ok())
+            .map(|a| a.port());
+        if let Some(port) = first_tls_port {
+            headers.set_https_port(port);
+        }
         Ok(Self {
             listeners,
             state: Arc::new(State {
@@ -113,6 +126,7 @@ impl Server {
                 roots,
                 router: Router::new(config),
                 tls,
+                headers,
             }),
         })
     }
@@ -290,17 +304,23 @@ async fn serve<I>(
 async fn handle(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
     let started = std::time::Instant::now();
     let entry = AccessEntry::new(&req, conn);
-    let response = respond(state, req, conn).await;
+    let (mut response, vhost) = respond(state, req, conn).await;
+    state.headers.apply(&mut response, vhost, conn.tls_vhost);
     entry.log(&response, started.elapsed());
     response
 }
 
-/// Applies request-level limits, then routes the request.
-async fn respond(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
+/// Applies request-level limits, then routes the request. Also returns the
+/// vhost that answered, if any, for its response header policy.
+async fn respond(
+    state: &State,
+    req: Request<Incoming>,
+    conn: Conn,
+) -> (Response<Body>, Option<usize>) {
     let limits = &state.limits;
     let uri_len = req.uri().path_and_query().map_or(0, |pq| pq.as_str().len());
     if uri_len > limits.max_uri_bytes {
-        return response::status(StatusCode::URI_TOO_LONG);
+        return (response::status(StatusCode::URI_TOO_LONG), None);
     }
     // No route accepts a request body yet (T2.7). Rejecting any
     // Transfer-Encoding also defeats CL.TE / TE.CL smuggling, because hyper
@@ -311,36 +331,54 @@ async fn respond(state: &State, req: Request<Incoming>, conn: Conn) -> Response<
         .get(hyper::header::CONTENT_LENGTH)
         .is_some_and(|v| v.as_bytes() != b"0");
     if headers.contains_key(hyper::header::TRANSFER_ENCODING) {
-        return close(response::status(StatusCode::BAD_REQUEST));
+        return (close(response::status(StatusCode::BAD_REQUEST)), None);
     }
     if has_body {
-        return close(response::status(StatusCode::PAYLOAD_TOO_LARGE));
+        return (close(response::status(StatusCode::PAYLOAD_TOO_LARGE)), None);
     }
     let timeout = Duration::from_secs(limits.request_timeout_secs);
     match tokio::time::timeout(timeout, route(state, req, conn)).await {
-        Ok(response) => response,
-        Err(_) => response::status(StatusCode::SERVICE_UNAVAILABLE),
+        Ok(routed) => routed,
+        Err(_) => (response::status(StatusCode::SERVICE_UNAVAILABLE), None),
     }
 }
 
 /// Dispatches a request to the vhost chosen by its Host.
-async fn route(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
+async fn route(
+    state: &State,
+    req: Request<Incoming>,
+    conn: Conn,
+) -> (Response<Body>, Option<usize>) {
     match *req.method() {
         Method::GET | Method::HEAD => {
             if state.roots.is_empty() {
-                return response::status(StatusCode::NOT_FOUND);
+                return (response::status(StatusCode::NOT_FOUND), None);
             }
             match state.router.route(req.uri(), req.headers()) {
                 // T3.4: Host must name the vhost whose certificate was served.
                 Route::Vhost(index) if conn.tls_vhost.is_some_and(|t| t != index) => {
-                    response::status(StatusCode::MISDIRECTED_REQUEST)
+                    (response::status(StatusCode::MISDIRECTED_REQUEST), None)
                 }
                 Route::Vhost(index) => {
+                    if conn.tls_vhost.is_none() {
+                        let host = request_host(req.uri(), req.headers());
+                        let redirect = state.headers.https_redirect(
+                            &state.router,
+                            index,
+                            host.as_deref(),
+                            req.uri(),
+                        );
+                        if let Some(redirect) = redirect {
+                            return (redirect, Some(index));
+                        }
+                    }
                     let root = &state.roots[index];
-                    files::serve(root, req.method(), req.uri().path(), req.headers()).await
+                    let response =
+                        files::serve(root, req.method(), req.uri().path(), req.headers()).await;
+                    (response, Some(index))
                 }
-                Route::Misdirected => response::status(StatusCode::MISDIRECTED_REQUEST),
-                Route::BadHost => close(response::status(StatusCode::BAD_REQUEST)),
+                Route::Misdirected => (response::status(StatusCode::MISDIRECTED_REQUEST), None),
+                Route::BadHost => (close(response::status(StatusCode::BAD_REQUEST)), None),
             }
         }
         Method::OPTIONS => {
@@ -350,7 +388,7 @@ async fn route(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Bo
                 hyper::header::ALLOW,
                 hyper::header::HeaderValue::from_static("GET, HEAD, OPTIONS"),
             );
-            response
+            (response, None)
         }
         _ => {
             let mut response = response::status(StatusCode::METHOD_NOT_ALLOWED);
@@ -358,7 +396,7 @@ async fn route(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Bo
                 hyper::header::ALLOW,
                 hyper::header::HeaderValue::from_static("GET, HEAD, OPTIONS"),
             );
-            response
+            (response, None)
         }
     }
 }

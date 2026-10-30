@@ -60,23 +60,30 @@ fn vhost(dir: &Path, name: &str, with_tls: bool) -> String {
 }
 
 struct Running {
+    plain: SocketAddr,
     tls: SocketAddr,
     _stop: tokio::sync::oneshot::Sender<()>,
 }
 
+/// Starts a server with one plain and one TLS listener.
 async fn start(server_section: &str, vhosts: &str) -> Running {
     let toml = format!(
-        "[server]\nlisten_tls = [\"127.0.0.1:0\"]\n{server_section}\n\
-         [server.limits]\nheader_timeout_secs = 1\n{vhosts}"
+        "[server]\nlisten = [\"127.0.0.1:0\"]\nlisten_tls = [\"127.0.0.1:0\"]\n\
+         {server_section}\n[server.limits]\nheader_timeout_secs = 1\n{vhosts}"
     );
     let config = wedge_config::from_str(&toml).unwrap();
     let server = Server::bind(&config).await.unwrap();
+    let plain = server.local_addrs()[0];
     let tls = server.local_tls_addrs()[0];
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(server.run(async {
         let _ = rx.await;
     }));
-    Running { tls, _stop: tx }
+    Running {
+        plain,
+        tls,
+        _stop: tx,
+    }
 }
 
 fn client(
@@ -246,4 +253,163 @@ async fn bad_keys_fail_startup_without_leaking_key_material() {
     std::fs::remove_file(dir.join("a.test.crt")).unwrap();
     let err = bind(base).await.expect("missing cert must fail");
     assert!(err.contains("a.test.crt"), "{err}");
+}
+
+/// Sends a plain-HTTP GET and returns the raw reply.
+async fn plain_get(addr: SocketAddr, target: &str, host: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let request = format!("GET {target} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+fn header<'a>(reply: &'a str, name: &str) -> Option<&'a str> {
+    let head = reply.split("\r\n\r\n").next()?;
+    head.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+#[tokio::test]
+async fn security_headers_everywhere_and_hsts_only_over_tls() {
+    let pki = pki(&["a.test"]);
+    let vhosts = vhost(pki.dir.path(), "a.test", true)
+        + "[vhost.headers]\n\"Content-Security-Policy\" = \"default-src 'self'\"\n\
+           \"X-Frame-Options\" = \"\"\n";
+    let server = start("", &vhosts).await;
+
+    let reply = plain_get(server.plain, "/", "a.test").await;
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert_eq!(header(&reply, "x-content-type-options"), Some("nosniff"));
+    assert_eq!(
+        header(&reply, "referrer-policy"),
+        Some("strict-origin-when-cross-origin")
+    );
+    assert_eq!(
+        header(&reply, "content-security-policy"),
+        Some("default-src 'self'")
+    );
+    assert_eq!(
+        header(&reply, "x-frame-options"),
+        None,
+        "removed by the vhost"
+    );
+    // T3.11: never over plain HTTP (RFC 6797 §7.2).
+    assert_eq!(header(&reply, "strict-transport-security"), None);
+
+    // Errors that no vhost answered still get the defaults.
+    let reply = plain_get(server.plain, "/", "bad host").await;
+    assert_eq!(status(&reply), 400, "{reply}");
+    assert_eq!(header(&reply, "x-frame-options"), Some("SAMEORIGIN"));
+
+    let stream = connect(&default_client(&pki), server.tls, "a.test")
+        .await
+        .unwrap();
+    let reply = get(stream, "a.test").await;
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert_eq!(
+        header(&reply, "strict-transport-security"),
+        Some("max-age=31536000")
+    );
+    assert_eq!(
+        header(&reply, "content-security-policy"),
+        Some("default-src 'self'")
+    );
+}
+
+#[tokio::test]
+async fn http_redirects_to_https_without_open_redirect() {
+    let pki = pki(&["a.test"]);
+    let vhosts = vhost(pki.dir.path(), "a.test", true)
+        + "redirect_http = true\nhsts_include_subdomains = true\n";
+    let server = start("default_vhost = \"a.test\"", &vhosts).await;
+    let port = server.tls.port();
+
+    let reply = plain_get(server.plain, "/x?y=1", "a.test").await;
+    assert_eq!(status(&reply), 308, "{reply}");
+    let expected = format!("https://a.test:{port}/x?y=1");
+    assert_eq!(header(&reply, "location"), Some(expected.as_str()));
+
+    // T3.12: a Host that only reached this vhost as the default is replaced
+    // by the vhost's own name.
+    let reply = plain_get(server.plain, "/", "evil.test").await;
+    assert_eq!(status(&reply), 308, "{reply}");
+    let expected = format!("https://a.test:{port}/");
+    assert_eq!(header(&reply, "location"), Some(expected.as_str()));
+
+    let stream = connect(&default_client(&pki), server.tls, "a.test")
+        .await
+        .unwrap();
+    let reply = get(stream, "a.test").await;
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert_eq!(
+        header(&reply, "strict-transport-security"),
+        Some("max-age=31536000; includeSubDomains")
+    );
+}
+
+/// Builds a ClientHello record by hand: `version` in both the record and the
+/// hello, the given cipher suites, and no extensions (so no TLS 1.3 offer).
+fn legacy_client_hello(version: [u8; 2], suites: &[u8]) -> Vec<u8> {
+    let mut body = version.to_vec();
+    body.extend([0x5a; 32]); // client random
+    body.push(0); // empty session id
+    body.extend(u16::try_from(suites.len()).unwrap().to_be_bytes());
+    body.extend(suites);
+    body.extend([1, 0]); // compression: null only
+    let mut handshake = vec![1]; // client_hello
+    handshake.extend(&u32::try_from(body.len()).unwrap().to_be_bytes()[1..]);
+    handshake.extend(body);
+    let mut record = vec![0x16, version[0], version[1]];
+    record.extend(u16::try_from(handshake.len()).unwrap().to_be_bytes());
+    record.extend(handshake);
+    record
+}
+
+#[tokio::test]
+async fn known_bad_client_hellos_get_no_server_hello() {
+    let pki = pki(&["a.test"]);
+    let server = start("", &vhost(pki.dir.path(), "a.test", true)).await;
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        // TLS 1.0 / 1.1 with CBC suites (BEAST, POODLE era): T3.1.
+        (
+            "TLS 1.0",
+            legacy_client_hello([3, 1], &[0x00, 0x2f, 0x00, 0x35]),
+        ),
+        ("TLS 1.1", legacy_client_hello([3, 2], &[0x00, 0x2f])),
+        // TLS 1.2 offering only RC4, 3DES and export suites.
+        (
+            "weak suites",
+            legacy_client_hello([3, 3], &[0x00, 0x05, 0x00, 0x0a, 0x00, 0x03]),
+        ),
+        // SSLv2-compatible hello.
+        (
+            "SSLv2",
+            vec![
+                0x80, 0x2e, 0x01, 0x00, 0x02, 0x00, 0x15, 0x00, 0x00, 0x00, 0x10,
+            ],
+        ),
+        // A record claiming 16 KiB that never arrives, then garbage.
+        ("truncated", vec![0x16, 0x03, 0x01, 0x40, 0x00, 0x01]),
+        (
+            "garbage",
+            b"\x16\x03\x03\x00\x05\xff\xff\xff\xff\xff".to_vec(),
+        ),
+    ];
+    for (name, bytes) in cases {
+        let mut stream = TcpStream::connect(server.tls).await.unwrap();
+        stream.write_all(&bytes).await.unwrap();
+        let mut reply = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut reply)).await;
+        // 0x16 would be a handshake record, i.e. a ServerHello.
+        assert_ne!(reply.first(), Some(&0x16), "{name}: {reply:02x?}");
+    }
+    // The server is unharmed.
+    let stream = connect(&default_client(&pki), server.tls, "a.test")
+        .await
+        .unwrap();
+    assert_eq!(status(&get(stream, "a.test").await), 200);
 }

@@ -22,7 +22,9 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub use model::{Config, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls, VirtualHost};
+pub use model::{
+    Config, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls, VirtualHost, RESERVED_HEADERS,
+};
 pub use schema::json_schema;
 pub use secret::{Secret, SecretError, SecretRef, MAX_SECRET_SIZE};
 

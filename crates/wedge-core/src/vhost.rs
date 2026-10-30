@@ -86,7 +86,7 @@ impl Router {
 /// Extracts and normalizes the request host: lower case, no port, no trailing
 /// dot. Exactly one Host header is required unless the URI carries an
 /// authority (HTTP/2, or HTTP/1 absolute-form).
-fn request_host(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+pub(crate) fn request_host(uri: &Uri, headers: &HeaderMap) -> Option<String> {
     let mut values = headers.get_all(HOST).iter();
     let header = values.next();
     if values.next().is_some() {

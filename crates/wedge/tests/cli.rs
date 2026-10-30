@@ -27,7 +27,10 @@ fn check_config_accepts_example() {
         "{stdout}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(stdout.contains("1 listener(s), 2 vhost(s)"), "{stdout}");
+    assert!(
+        stdout.contains("1 listener(s), 0 TLS listener(s), 2 vhost(s)"),
+        "{stdout}"
+    );
 }
 
 #[test]
