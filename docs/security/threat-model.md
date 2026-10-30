@@ -92,5 +92,10 @@ rustls with the ring provider is the only TLS stack.
   that copy. Anyone who can read wedge's memory (root, a debugger, a core
   dump) can read the key. Run wedge as a dedicated user with core dumps
   disabled.
+- No post-quantum key exchange: the ring provider does not implement ML-KEM,
+  so recorded TLS traffic could be decrypted by a future quantum computer
+  ("harvest now, decrypt later"). Offering `X25519MLKEM768` needs the
+  aws-lc-rs provider, which would change the "ring only" decision in the
+  project spec.
 - Phase 7 will test these mitigations against the built binary and record the
   results in `assessment-report.md`.
