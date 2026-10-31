@@ -40,7 +40,7 @@ macro_rules! here {
 pub(crate) use here;
 
 /// Header names always redacted unless `log_secrets` is on.
-const SENSITIVE: &[&str] = &[
+pub(crate) const SENSITIVE: &[&str] = &[
     "authorization",
     "cookie",
     "set-cookie",
@@ -361,16 +361,40 @@ impl Direction {
 /// Redacts credential header values and request-line query strings in a
 /// byte stream that may split lines anywhere. Complete lines are released
 /// redacted; a partial line is held back until it completes or grows past
-/// `MAX_PENDING_LINE` (then released as is, since it is not a header).
+/// `MAX_PENDING_LINE`. An over-long line is then judged by its start: if it
+/// is sensitive, the redacted start is released and the rest of the line is
+/// dropped up to its newline; otherwise it passes through.
 #[derive(Default)]
-struct LineRedactor {
+pub(crate) struct LineRedactor {
     pending: Vec<u8>,
+    /// Inside an over-long line: `Some(true)` drops the rest of it,
+    /// `Some(false)` passes it through.
+    long_line: Option<bool>,
 }
 
 impl LineRedactor {
-    fn feed(&mut self, bytes: &[u8], names: &[String]) -> Vec<u8> {
+    pub(crate) fn feed(&mut self, bytes: &[u8], names: &[String]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut bytes = bytes;
+        if let Some(drop) = self.long_line {
+            let Some(newline) = bytes.iter().position(|b| *b == b'\n') else {
+                if !drop {
+                    out.extend_from_slice(bytes);
+                }
+                return out;
+            };
+            let (line_rest, after) = bytes.split_at(newline + 1);
+            if drop {
+                let crlf = line_rest.len() > 1 && line_rest[line_rest.len() - 2] == b'\r';
+                out.extend_from_slice(if crlf { b"\r\n" } else { b"\n" });
+            } else {
+                out.extend_from_slice(line_rest);
+            }
+            self.long_line = None;
+            bytes = after;
+        }
         self.pending.extend_from_slice(bytes);
-        let mut out = Vec::with_capacity(self.pending.len());
+        out.reserve(self.pending.len());
         let mut start = 0;
         while let Some(end) = self.pending[start..].iter().position(|b| *b == b'\n') {
             let line = &self.pending[start..=start + end];
@@ -379,7 +403,7 @@ impl LineRedactor {
         }
         let rest = self.pending.split_off(start);
         if rest.len() > MAX_PENDING_LINE {
-            out.extend_from_slice(&rest);
+            self.long_line = Some(redact_partial(&rest, names, &mut out));
             self.pending.clear();
         } else {
             self.pending = rest;
@@ -387,14 +411,40 @@ impl LineRedactor {
         out
     }
 
-    fn finish(&mut self, names: &[String]) -> Vec<u8> {
+    /// Releases a line cut off by the end of the stream.
+    pub(crate) fn finish(&mut self, names: &[String]) -> Vec<u8> {
         let rest = std::mem::take(&mut self.pending);
         let mut out = Vec::new();
         if !rest.is_empty() {
-            redact_line(&rest, names, &mut out);
+            redact_partial(&rest, names, &mut out);
         }
         out
     }
+}
+
+/// Writes the redacted form of the start of a line whose end has not been
+/// seen, and returns whether the rest of the line must be dropped: a
+/// credential header, or a request line (`METHOD SP target`) with a query.
+fn redact_partial(start: &[u8], names: &[String], out: &mut Vec<u8>) -> bool {
+    if let Some(colon) = start.iter().position(|b| *b == b':') {
+        let name = String::from_utf8_lossy(&start[..colon])
+            .trim()
+            .to_ascii_lowercase();
+        if names.contains(&name) {
+            out.extend_from_slice(&start[..=colon]);
+            out.extend_from_slice(b" [REDACTED]");
+            return true;
+        }
+    }
+    let method_len = start.iter().take_while(|b| b.is_ascii_uppercase()).count();
+    let request_line = method_len > 0 && start.get(method_len) == Some(&b' ');
+    if let (true, Some(q)) = (request_line, start.iter().position(|b| *b == b'?')) {
+        out.extend_from_slice(&start[..=q]);
+        out.extend_from_slice(b"[REDACTED]");
+        return true;
+    }
+    out.extend_from_slice(start);
+    false
 }
 
 fn redact_line(line: &[u8], names: &[String], out: &mut Vec<u8>) {
@@ -618,6 +668,30 @@ mod tests {
              Cookie: [REDACTED]\r\n\r\nbody"
         );
         assert!(!text.contains("s3cret") && !text.contains("abc") && !text.contains("sid="));
+    }
+
+    #[test]
+    fn redactor_hides_long_lines_split_across_reads() {
+        // Lines longer than MAX_PENDING_LINE arrive in TCP-sized pieces; the
+        // secret must not be released when the held-back part overflows.
+        let secret = "S".repeat(9000);
+        let query = "q".repeat(9000);
+        let stream = format!(
+            "GET /a?{query} HTTP/1.1\r\nAuthorization: Bearer {secret}\r\nX-Ok: {}\r\n\r\n",
+            "o".repeat(9000)
+        );
+        let mut r = LineRedactor::default();
+        let mut out = Vec::new();
+        for chunk in stream.as_bytes().chunks(1400) {
+            out.extend(r.feed(chunk, &names()));
+        }
+        out.extend(r.finish(&names()));
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("SSSS"), "secret leaked");
+        assert!(!text.contains("qqqq"), "query leaked");
+        assert!(text.contains("GET /a?[REDACTED]"), "{}", &text[..80]);
+        assert!(text.contains("\r\nAuthorization: [REDACTED]\r\nX-Ok: ooo"));
+        assert!(text.ends_with(&format!("{}\r\n\r\n", "o".repeat(100))));
     }
 
     #[test]

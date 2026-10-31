@@ -111,6 +111,87 @@ pub mod fuzzing {
         );
         assert_eq!(headers.get_all("x-forwarded-proto").iter().count(), 1);
     }
+
+    /// Feeds request header lines to the parsers that see them before any
+    /// other check, and panics if a guarantee breaks: the routed Host is
+    /// normalized (T2.16), a partial range lies inside the file (T2.10), and
+    /// the capture log never shows a credential header's value, however the
+    /// bytes are split into reads (T5.9). The first two bytes pick the read size
+    /// and the length of the planted secret.
+    pub fn check_request_headers(input: &[u8]) {
+        use hyper::header::{HeaderMap, HeaderName, HeaderValue};
+
+        let [chunk, pad, rest @ ..] = input else {
+            return;
+        };
+        let text = String::from_utf8_lossy(rest);
+        let mut headers = HeaderMap::new();
+        for line in text.lines() {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.trim().as_bytes()),
+                HeaderValue::from_str(value.trim()),
+            ) {
+                headers.append(name, value);
+            }
+        }
+
+        if let Some(host) = crate::vhost::request_host(&hyper::Uri::from_static("/"), &headers) {
+            assert!(!host.is_empty() && !host.ends_with('.'), "{host:?}");
+            assert_eq!(host, host.to_ascii_lowercase());
+            assert!(
+                host.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-.[]:".contains(&b)),
+                "{host:?}"
+            );
+        }
+
+        let len = u64::from(*pad) * 7;
+        let validators = crate::files::Validators::new(len, None, None);
+        if let crate::files::RangeDecision::Partial(start, end) =
+            crate::files::requested_range(&headers, &validators, len)
+        {
+            assert!(start <= end && end < len, "{start}-{end} of {len}");
+        }
+
+        const SECRET: &[u8] = b"Zq9-wedge-fuzz-secret";
+        let mut stream: Vec<u8> = rest
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.windows(SECRET.len()).any(|w| w == SECRET))
+            .collect::<Vec<_>>()
+            .join(&b'\n');
+        // Plant the secret at a line start chosen by the input, padded so it
+        // can be longer than the redactor's held-back limit.
+        let at = stream
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .map(|(i, _)| i + 1)
+            .nth(usize::from(*pad) % 4)
+            .unwrap_or(0);
+        let mut planted = b"Authorization: Bearer ".to_vec();
+        planted.extend(std::iter::repeat(b'x').take(usize::from(*pad) * 40));
+        planted.extend_from_slice(SECRET);
+        planted.extend_from_slice(b"\r\n");
+        stream.splice(at..at, planted);
+
+        let names: Vec<String> = crate::capture::SENSITIVE
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let mut redactor = crate::capture::LineRedactor::default();
+        let mut out = Vec::new();
+        for piece in stream.chunks(usize::from(*chunk).max(1) * 23) {
+            out.extend(redactor.feed(piece, &names));
+        }
+        out.extend(redactor.finish(&names));
+        assert!(
+            !out.windows(SECRET.len()).any(|w| w == SECRET),
+            "credential reached the capture log"
+        );
+    }
 }
 
 /// Crate version, taken from Cargo metadata.
@@ -135,6 +216,14 @@ mod tests {
             "relative\0",
         ] {
             fuzzing::check_proxy_request(input);
+        }
+        for input in [
+            &b"\x40\x00Host: Example.COM.:8080\nRange: bytes=0-"[..],
+            b"\x01\xffRange: bytes=-5\nAuthorization: Basic a\nCookie: x",
+            b"\x3d\xc8GET /?q HTTP/1.1\nHost: [::1]:99999\nRange: bytes=9-3",
+            b"\x00\x00",
+        ] {
+            fuzzing::check_request_headers(input);
         }
     }
 }

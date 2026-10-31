@@ -215,14 +215,14 @@ fn accepts(accept_encoding: &str, coding: &str) -> bool {
     })
 }
 
-struct Validators {
+pub(crate) struct Validators {
     etag: String,
     last_modified: Option<String>,
     modified: Option<SystemTime>,
 }
 
 impl Validators {
-    fn new(len: u64, modified: Option<SystemTime>, encoding: Option<&str>) -> Self {
+    pub(crate) fn new(len: u64, modified: Option<SystemTime>, encoding: Option<&str>) -> Self {
         let nanos = modified
             .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_nanos());
@@ -257,7 +257,7 @@ impl Validators {
     }
 }
 
-enum RangeDecision {
+pub(crate) enum RangeDecision {
     Full,
     /// Inclusive start and end.
     Partial(u64, u64),
@@ -266,7 +266,11 @@ enum RangeDecision {
 
 /// Interprets a `Range` header. Only one range is honoured; multi-range or
 /// malformed headers get the full body, as RFC 9110 permits (T2.10).
-fn requested_range(headers: &HeaderMap, validators: &Validators, len: u64) -> RangeDecision {
+pub(crate) fn requested_range(
+    headers: &HeaderMap,
+    validators: &Validators,
+    len: u64,
+) -> RangeDecision {
     let Some(range) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) else {
         return RangeDecision::Full;
     };
