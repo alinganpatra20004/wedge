@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Release pipeline (threat model T6.1, T6.2, T6.9). A tag v* builds every
+# target, packages them, writes SHA256SUMS, attests build provenance and
+# publishes a GitHub Release. A manual run builds everything without
+# publishing, to test the pipeline.
+
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit
+      - run: cargo deny check
+      - run: cargo test --all --locked -q
+
+  linux:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pwsh scripts/build-all.ps1 -SkipWindows
+      - run: docker run --rm -v "$PWD:/src" -w /src --entrypoint sh goreleaser/nfpm:v2.41.1 scripts/package-linux.sh
+      - run: sh scripts/build-oci.sh amd64 && sh scripts/build-oci.sh arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: build/
+
+  windows:
+    needs: gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pwsh scripts/build-all.ps1 -SkipLinux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/
+
+  macos:
+    needs: gate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pwsh scripts/build-all.ps1 -MacOS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/
+
+  publish:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: build/
+          merge-multiple: true
+      - run: pwsh scripts/build-all.ps1 -ChecksumsOnly
+      - run: cd build && sha256sum -c SHA256SUMS
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            build/*.tar.gz
+            build/*.zip
+            build/*.deb
+            build/*.rpm
+            build/*.tar
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find build -maxdepth 1 -type f)
+          gh release create "$GITHUB_REF_NAME" $files \
+            --verify-tag --title "wedge $GITHUB_REF_NAME" --notes-file packaging/RELEASE_NOTES.md
+      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run
+          path: build/

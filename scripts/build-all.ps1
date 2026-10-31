@@ -16,10 +16,13 @@
 # Usage: pwsh scripts/build-all.ps1 [-SkipLinux] [-SkipWindows] [-ChecksumsOnly]
 # -ChecksumsOnly rewrites build/SHA256SUMS for every file now in build/
 # (run it after scripts/package-linux.sh and scripts/build-oci.sh).
+# -MacOS builds the two macOS targets instead (run it on a Mac; the release
+# workflow does this on a macOS runner).
 param(
     [switch]$SkipLinux,
     [switch]$SkipWindows,
-    [switch]$ChecksumsOnly
+    [switch]$ChecksumsOnly,
+    [switch]$MacOS
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -55,7 +58,19 @@ function New-Layout([string]$Target, [string]$Binary) {
 
 New-Item -ItemType Directory -Force build | Out-Null
 $layouts = @()
-if ($ChecksumsOnly) { $SkipWindows = $true; $SkipLinux = $true }
+if ($ChecksumsOnly -or $MacOS) { $SkipWindows = $true; $SkipLinux = $true }
+
+if ($MacOS) {
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+    $env:RUSTFLAGS = "--remap-path-prefix=$PWD=/build/wedge --remap-path-prefix=$cargoHome=/cargo"
+    foreach ($target in 'aarch64-apple-darwin', 'x86_64-apple-darwin') {
+        Write-Host "== $target"
+        Invoke-Checked { rustup target add $target } "rustup target add $target"
+        Invoke-Checked { cargo build --release --locked -p wedge --target $target } "$target build"
+        $layouts += New-Layout $target "target/$target/release/wedge"
+    }
+    Remove-Item Env:RUSTFLAGS
+}
 
 if (-not $SkipWindows) {
     Write-Host "== $windowsTarget"
