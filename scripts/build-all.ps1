@@ -33,12 +33,23 @@ $linuxTargets = @(
     'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl'
 )
 $windowsTarget = 'x86_64-pc-windows-msvc'
+# cargo-auditable embeds the dependency list in each binary, so cargo-audit
+# and Trivy can check a shipped binary (Phase 7.1). Keep in step with
+# scripts/build-linux.sh.
+$auditableVersion = '0.7.7'
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' |
     Select-Object -First 1).Matches[0].Groups[1].Value
 
 function Invoke-Checked([scriptblock]$Block, [string]$What) {
     & $Block
     if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" }
+}
+
+function Install-Auditable {
+    $installed = cargo auditable --version 2>$null
+    if ($LASTEXITCODE -ne 0 -or "$installed" -notmatch [regex]::Escape($auditableVersion)) {
+        Invoke-Checked { cargo install --locked cargo-auditable --version $auditableVersion } 'cargo-auditable install'
+    }
 }
 
 # Copies the binary and the shipped documents into build/<target>/.
@@ -69,12 +80,13 @@ $layouts = @()
 if ($ChecksumsOnly -or $MacOS) { $SkipWindows = $true; $SkipLinux = $true }
 
 if ($MacOS) {
+    Install-Auditable
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
     $env:RUSTFLAGS = "--remap-path-prefix=$PWD=/build/wedge --remap-path-prefix=$cargoHome=/cargo"
     foreach ($target in 'aarch64-apple-darwin', 'x86_64-apple-darwin') {
         Write-Host "== $target"
         Invoke-Checked { rustup target add $target } "rustup target add $target"
-        Invoke-Checked { cargo build --release --locked -p wedge --target $target } "$target build"
+        Invoke-Checked { cargo auditable build --release --locked -p wedge --target $target } "$target build"
         $layouts += New-Layout $target "target/$target/release/wedge"
     }
     Remove-Item Env:RUSTFLAGS
@@ -82,10 +94,11 @@ if ($MacOS) {
 
 if (-not $SkipWindows) {
     Write-Host "== $windowsTarget"
+    Install-Auditable
     # Keep build-machine paths out of the binary (threat model T6.8).
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
     $env:RUSTFLAGS = "--remap-path-prefix=$PWD=/build/wedge --remap-path-prefix=$cargoHome=/cargo"
-    Invoke-Checked { cargo build --release --locked -p wedge --target $windowsTarget } 'Windows build'
+    Invoke-Checked { cargo auditable build --release --locked -p wedge --target $windowsTarget } 'Windows build'
     Remove-Item Env:RUSTFLAGS
     $layouts += New-Layout $windowsTarget "target/$windowsTarget/release/wedge.exe"
 }
@@ -94,7 +107,8 @@ if (-not $SkipLinux) {
     Write-Host "== Linux targets in $zigImage"
     Invoke-Checked {
         docker run --rm -v "${PWD}:/src" -v wedge-zig-cargo:/root/.cargo/registry `
-            -v wedge-zig-target:/src/target -w /src $zigImage sh scripts/build-linux.sh
+            -v wedge-zig-target:/src/target -e "AUDITABLE_VERSION=$auditableVersion" `
+            -w /src $zigImage sh scripts/build-linux.sh
     } 'Linux build'
     # The binaries are in the wedge-zig-target volume; copy them out.
     $out = Join-Path $PWD 'build/.linux'

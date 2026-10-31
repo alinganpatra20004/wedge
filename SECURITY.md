@@ -71,6 +71,15 @@ cosign verify-blob <file> --bundle <file>.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+From the release after 0.1.0, each release has a CycloneDX SBOM
+(`wedge-<version>.cdx.json`), and the binaries embed their dependency list
+(`cargo auditable`), so a downloaded binary can be checked directly:
+
+```sh
+cargo audit bin wedge
+trivy rootfs wedge
+```
+
 The .deb and .rpm packages are also GPG-signed. The public key is
 [`packaging/wedge-release.asc`](packaging/wedge-release.asc), fingerprint
 `B84A 920D B6B5 11E6 46B1 24FD 983E F3CD D108 E023`:

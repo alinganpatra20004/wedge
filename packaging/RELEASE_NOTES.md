@@ -27,6 +27,7 @@ First release of **wEdge** (`wedge`), a web and application server in Rust.
 | `wedge-0.1.0-{x86_64,aarch64}-unknown-linux-gnu.tar.gz` | Linux with glibc 2.17+ |
 | `wedge-0.1.0-{aarch64,x86_64}-apple-darwin.tar.gz` | macOS |
 | `wedge-0.1.0-oci-{amd64,arm64}.tar` | container image (`docker load -i`) |
+| `wedge-0.1.0.cdx.json` | software bill of materials (CycloneDX 1.5) |
 
 Install guides: <https://github.com/alinganpatra20004/wedge/blob/main/docs/install/README.md>.
 Every package and archive contains the user guide (Markdown and HTML).
