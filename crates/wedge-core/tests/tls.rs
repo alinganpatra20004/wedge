@@ -413,3 +413,40 @@ async fn known_bad_client_hellos_get_no_server_hello() {
         .unwrap();
     assert_eq!(status(&get(stream, "a.test").await), 200);
 }
+
+#[tokio::test]
+async fn capture_records_handshake_and_decrypted_bytes() {
+    let pki = pki(&["a.test"]);
+    let log = pki.dir.path().join("capture.log");
+    let server_section = format!(
+        "[server.debug]\nread_packet = true\ncapture_file = {:?}",
+        log.display().to_string()
+    );
+    let server = start(&server_section, &vhost(pki.dir.path(), "a.test", true)).await;
+    let stream = connect(&default_client(&pki), server.tls, "a.test")
+        .await
+        .unwrap();
+    let request =
+        "GET / HTTP/1.1\r\nHost: a.test\r\nCookie: id=TLSSECRET\r\nConnection: close\r\n\r\n";
+    let mut stream = stream;
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut reply = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut reply)).await;
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        text.contains("handshake complete: sni=a.test alpn=http/1.1"),
+        "{text}"
+    );
+    assert!(text.contains("version=TLSv1_3"), "{text}");
+    // Ciphertext under TCP, decrypted bytes under TLS, parsed under HTTP.
+    assert!(text
+        .lines()
+        .any(|l| l.contains(" TCP   ") && l.contains("bytes at offset")));
+    assert!(text
+        .lines()
+        .any(|l| l.contains(" TLS   ") && l.contains("complete lines, redacted")));
+    assert!(text.contains("cookie: [REDACTED]"), "{text}");
+    assert!(!text.contains("TLSSECRET"), "{text}");
+}

@@ -32,6 +32,65 @@
       ],
       "type": "object"
     },
+    "DebugConfig": {
+      "additionalProperties": false,
+      "description": "Debug capture (`[server.debug]`). See the threat model, T5.9 to T5.12.",
+      "properties": {
+        "capture_file": {
+          "default": "capture.log",
+          "description": "Capture log path; relative paths are relative to the master file.",
+          "type": "string"
+        },
+        "keep_files": {
+          "default": 5,
+          "description": "Rotated files kept (`capture.log.1` ...).",
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "log_secrets": {
+          "default": false,
+          "description": "Write credentials (`Authorization`, `Cookie`, `Set-Cookie`,\n`Proxy-Authorization` and `redact_headers`) unredacted. Breaks the\n\"secrets never reach logs\" rule while on.",
+          "type": "boolean"
+        },
+        "max_bytes_per_connection": {
+          "default": 65536,
+          "description": "Bytes recorded per connection and direction; the rest is counted only.",
+          "format": "uint64",
+          "maximum": 1073741824,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_file_bytes": {
+          "default": 104857600,
+          "description": "Size at which the capture log is rotated.",
+          "format": "uint64",
+          "maximum": 17179869184,
+          "minimum": 65536,
+          "type": "integer"
+        },
+        "read_packet": {
+          "default": false,
+          "description": "Write a capture log with each connection's bytes at every layer wedge\nsees (TCP, TLS, HTTP, routing), each step tagged with the source file\nthat handled it.",
+          "type": "boolean"
+        },
+        "redact_headers": {
+          "default": [],
+          "description": "More header names to redact, besides the built-in ones.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tcp_headers": {
+          "default": false,
+          "description": "Also record IP/TCP packet headers (sequence numbers, flags, window,\nretransmits) through pcap. Needs a build with the `packet-capture`\nfeature, libpcap or Npcap, and root/admin or CAP_NET_RAW.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "IpNet": {
       "description": "IP address or CIDR range, such as \"10.0.0.0/8\" or \"::1\".",
       "type": "string"
@@ -161,6 +220,10 @@
             }
           ],
           "description": "Admin listener for metrics and reload. Off unless set."
+        },
+        "debug": {
+          "$ref": "#/$defs/DebugConfig",
+          "description": "Debug capture of every request. For troubleshooting only; never in\nproduction. Restart-only."
         },
         "default_vhost": {
           "default": null,

@@ -26,9 +26,10 @@ use hyper_util::server::graceful::{GracefulShutdown, Watcher};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
-use wedge_config::{AdminConfig, Config, IpNet, Limits, Secret};
+use wedge_config::{AdminConfig, Config, DebugConfig, IpNet, Limits, Secret};
 
 use crate::admin;
+use crate::capture::{here, Capture, Handled, Recorded};
 use crate::files::{self, Root};
 use crate::headers::Policy;
 use crate::idle::IdleTimeout;
@@ -57,6 +58,8 @@ pub enum ServerError {
     },
     #[error(transparent)]
     Tls(#[from] TlsError),
+    #[error("cannot open the debug capture log: {0}")]
+    Capture(#[source] io::Error),
     #[error("admin token: {0}")]
     AdminToken(#[source] wedge_config::SecretError),
     #[error("invalid response header configuration: {0}")]
@@ -121,6 +124,8 @@ struct Shared {
     admin_token: Option<Secret>,
     /// Time of the last reload; the lock also serializes reloads (T5.5).
     last_reload: tokio::sync::Mutex<Option<Instant>>,
+    /// The debug capture log, when `[server.debug] read_packet` is on.
+    capture: Option<Arc<Capture>>,
 }
 
 #[derive(PartialEq)]
@@ -129,6 +134,7 @@ struct Fixed {
     listen_tls: Vec<SocketAddr>,
     admin: Option<AdminConfig>,
     limits: Limits,
+    debug: DebugConfig,
 }
 
 impl Fixed {
@@ -138,6 +144,7 @@ impl Fixed {
             listen_tls: config.server.listen_tls.clone(),
             admin: config.server.admin.clone(),
             limits: config.server.limits.clone(),
+            debug: config.server.debug.clone(),
         }
     }
 
@@ -151,6 +158,9 @@ impl Fixed {
             Some("[server.admin]")
         } else if self.limits != other.limits {
             Some("[server.limits]")
+        } else if self.debug != other.debug {
+            // T5.6: a reload can never switch capture on.
+            Some("[server.debug]")
         } else {
             None
         }
@@ -169,6 +179,8 @@ struct State {
     headers: Policy,
     proxy: Proxy,
     metrics: Metrics,
+    /// Vhost names in config order, for the capture log.
+    vhost_names: Vec<String>,
     /// Dropping or signalling this stops this state's health checks.
     health_stop: watch::Sender<bool>,
 }
@@ -208,6 +220,7 @@ impl State {
             headers,
             proxy,
             metrics: Metrics::new(config),
+            vhost_names: config.vhost.iter().map(|v| v.name.clone()).collect(),
             health_stop,
         })
     }
@@ -219,6 +232,8 @@ struct ConnInfo {
     peer: SocketAddr,
     /// `Some` for TLS connections, holding the SNI name the client sent.
     tls_sni: Option<Option<Arc<str>>>,
+    /// The capture log and this connection's id in it.
+    capture: Option<(Arc<Capture>, u64)>,
 }
 
 /// Per-request view of the connection, resolved against the current state.
@@ -270,6 +285,10 @@ impl Server {
             None => None,
         };
         let state = State::build(config, https_port).await?;
+        let capture = Capture::start(&config.server.debug).map_err(ServerError::Capture)?;
+        if capture.is_some() {
+            warn_capture_on(&config.server.debug);
+        }
         Ok(Self {
             listeners,
             shared: Arc::new(Shared {
@@ -285,6 +304,7 @@ impl Server {
                     .unwrap_or_default(),
                 admin_token,
                 last_reload: tokio::sync::Mutex::new(None),
+                capture,
             }),
         })
     }
@@ -325,6 +345,9 @@ impl Server {
         let graceful = Arc::new(GracefulShutdown::new());
         let builder = Arc::new(protocol_builder(limits));
         let (stop_tx, stop_rx) = watch::channel(false);
+        if self.shared.capture.is_some() {
+            tokio::spawn(remind_capture_on(Arc::clone(&self.shared), stop_rx.clone()));
+        }
 
         let mut accept_tasks = Vec::new();
         for (listener, kind) in self.listeners {
@@ -450,6 +473,7 @@ async fn accept_loop(
             continue;
         }
         let _ = stream.set_nodelay(true);
+        let local = stream.local_addr().ok();
         let stream = IdleTimeout::new(stream, Duration::from_secs(limits.idle_timeout_secs));
         let shared = Arc::clone(&shared);
         let builder = Arc::clone(&builder);
@@ -458,9 +482,28 @@ async fn accept_loop(
         let watcher = graceful.watcher();
         tokio::spawn(async move {
             let state = shared.load();
+            // The admin listener is never captured: it carries the reload token.
+            let capture = shared
+                .capture
+                .clone()
+                .filter(|_| kind != Kind::Admin)
+                .map(|c| {
+                    let id = c.connection_id();
+                    let local = local.map_or_else(|| "-".to_owned(), |a| a.to_string());
+                    let listener = if kind == Kind::Tls { "TLS" } else { "plain" };
+                    let text = format!("accepted {peer} -> {local} on a {listener} listener");
+                    c.event(id, "TCP", here!(), &text);
+                    (c, id)
+                });
+            // On TLS listeners these bytes are ciphertext; no redaction needed.
+            let stream = match &capture {
+                Some((c, id)) => c.wrap(stream, *id, "TCP", kind != Kind::Tls),
+                None => Recorded::plain(stream),
+            };
             let plain = ConnInfo {
                 peer,
                 tls_sni: None,
+                capture: capture.clone(),
             };
             match (&state.tls, kind) {
                 (_, Kind::Admin) => serve(&builder, stream, &shared, plain, true, watcher).await,
@@ -469,20 +512,53 @@ async fn accept_loop(
                     // T3.5: the handshake shares the request-head time budget.
                     match tokio::time::timeout(budget, tls.acceptor.accept(stream)).await {
                         Ok(Ok(stream)) => {
-                            let sni = stream.get_ref().1.server_name().map(Arc::from);
+                            let session = stream.get_ref().1;
+                            let sni = session.server_name().map(Arc::from);
+                            let http2 = session.alpn_protocol() == Some(&b"h2"[..]);
+                            if let Some((c, id)) = &capture {
+                                let alpn = session
+                                    .alpn_protocol()
+                                    .map_or_else(|| "-".into(), String::from_utf8_lossy);
+                                let version = session
+                                    .protocol_version()
+                                    .map_or_else(|| "-".to_owned(), |v| format!("{v:?}"));
+                                let cipher = session
+                                    .negotiated_cipher_suite()
+                                    .map_or_else(|| "-".to_owned(), |s| format!("{:?}", s.suite()));
+                                let text = format!(
+                                    "handshake complete: sni={} alpn={alpn} version={version} \
+                                     cipher={cipher}",
+                                    sni.as_deref().unwrap_or("-"),
+                                );
+                                c.event(*id, "TLS", here!(), &text);
+                            }
+                            let mut stream = match &capture {
+                                Some((c, id)) => c.wrap(stream, *id, "TLS", true),
+                                None => Recorded::plain(stream),
+                            };
+                            if http2 {
+                                stream.set_http2();
+                            }
                             let conn = ConnInfo {
                                 peer,
                                 tls_sni: Some(sni),
+                                capture,
                             };
                             serve(&builder, stream, &shared, conn, false, watcher).await;
                         }
                         Ok(Err(e)) => {
                             state.metrics.tls_handshake_failed();
                             tracing::debug!(%peer, error = %e, "TLS handshake failed");
+                            if let Some((c, id)) = &capture {
+                                c.event(*id, "TLS", here!(), &format!("handshake failed: {e}"));
+                            }
                         }
                         Err(_) => {
                             state.metrics.tls_handshake_failed();
                             tracing::debug!(%peer, "TLS handshake timed out");
+                            if let Some((c, id)) = &capture {
+                                c.event(*id, "TLS", here!(), "handshake timed out");
+                            }
                         }
                     }
                 }
@@ -577,6 +653,11 @@ async fn handle(state: &State, req: Request<Incoming>, info: &ConnInfo) -> Respo
     };
     let entry = AccessEntry::new(&req, conn);
     let method = req.method().clone();
+    if let Some((c, id)) = &info.capture {
+        let target = req.uri().path_and_query().map_or("/", |pq| pq.as_str());
+        let first = format!("request {method} {} {:?}", c.target(target), req.version());
+        c.event(*id, "HTTP", here!(), &c.headers(&first, req.headers()));
+    }
     let (mut response, vhost) = if info.tls_sni.is_some() && tls_vhost.is_none() {
         // After a reload removed the certificate this connection was made
         // with: the client must reconnect (T3.4).
@@ -589,8 +670,62 @@ async fn handle(state: &State, req: Request<Incoming>, info: &ConnInfo) -> Respo
     state
         .metrics
         .request(vhost, &method, response.status().as_u16(), elapsed);
+    if let Some((c, id)) = &info.capture {
+        let name = vhost
+            .and_then(|i| state.vhost_names.get(i))
+            .map_or("-", String::as_str);
+        match response.extensions().get::<Handled>() {
+            Some(handled) => c.event(
+                *id,
+                "ROUTE",
+                handled.at,
+                &format!("vhost={name}: {}", handled.what),
+            ),
+            None => c.event(
+                *id,
+                "ROUTE",
+                here!(),
+                &format!("vhost={name}: answered by wedge"),
+            ),
+        }
+        let first = format!(
+            "response {} in {:.3} ms",
+            response.status(),
+            elapsed.as_secs_f64() * 1000.0
+        );
+        c.event(*id, "HTTP", here!(), &c.headers(&first, response.headers()));
+    }
     entry.log(&response, elapsed);
     response
+}
+
+/// Logs a loud warning that capture is on (T5.9).
+fn warn_capture_on(settings: &DebugConfig) {
+    tracing::warn!(
+        file = %settings.capture_file.display(),
+        log_secrets = settings.log_secrets,
+        "DEBUG CAPTURE IS ON: every request is written to the capture log; \
+         turn it off and delete the file when done"
+    );
+    if settings.log_secrets {
+        tracing::warn!("log_secrets is on: credentials are written UNREDACTED");
+    }
+}
+
+/// Repeats the capture warning every hour while it stays on.
+async fn remind_capture_on(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
+    let mut hourly = tokio::time::interval(Duration::from_secs(3600));
+    hourly.tick().await;
+    loop {
+        tokio::select! {
+            _ = hourly.tick() => {}
+            _ = stop.changed() => return,
+        }
+        warn_capture_on(&shared.fixed.debug);
+        if let Some(c) = &shared.capture {
+            tracing::warn!(dropped = c.dropped(), "capture events dropped so far");
+        }
+    }
 }
 
 /// Applies request-level limits, then routes the request. Also returns the

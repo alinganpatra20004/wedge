@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Debug capture example. FOR TROUBLESHOOTING ONLY, NEVER IN PRODUCTION.
+# Rename to 90-debug.toml and restart wedge (a reload cannot turn it on).
+#
+# The capture log records, per connection: TCP accept and raw bytes (hex +
+# ASCII), the TLS handshake (SNI, ALPN, version, cipher) and decrypted bytes,
+# parsed HTTP requests and responses, and which source file handled each
+# step (for example "files.rs:84 static file ..."). Request bodies are
+# recorded as they are. Delete the file when you are done.
+
+[server.debug]
+read_packet = true
+capture_file = "capture.log"        # created owner-only; relative to wedge.toml
+max_bytes_per_connection = 65536    # per direction; the rest is only counted
+max_file_bytes = 104857600          # rotate at 100 MiB
+keep_files = 5                      # capture.log.1 ... capture.log.5
+redact_headers = ["X-Api-Key"]      # in addition to Authorization, Cookie,
+                                    # Set-Cookie and Proxy-Authorization
+# log_secrets = true                # writes credentials and query strings
+                                    # UNREDACTED, and dumps HTTP/2 frames
+# tcp_headers = true                # IP/TCP packet headers via pcap; needs a
+                                    # build with the packet-capture feature

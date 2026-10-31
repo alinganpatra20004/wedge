@@ -24,8 +24,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use model::{
-    AdminConfig, Config, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls, VirtualHost,
-    RESERVED_HEADERS,
+    AdminConfig, Config, DebugConfig, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls,
+    VirtualHost, RESERVED_HEADERS,
 };
 pub use net::IpNet;
 pub use schema::json_schema;
@@ -82,6 +82,10 @@ pub fn load(master: &Path) -> Result<Config, ConfigError> {
     // Relative document roots are relative to the master file, not to the
     // working directory, so a config behaves the same wherever wedge starts.
     let base = master.parent().unwrap_or_else(|| Path::new("."));
+    let capture = &mut config.server.debug.capture_file;
+    if capture.is_relative() {
+        *capture = base.join(&*capture);
+    }
     if let Some(SecretRef::File(path)) = config.server.admin.as_mut().and_then(|a| a.token.as_mut())
     {
         if path.is_relative() {

@@ -115,6 +115,10 @@ pub struct ServerConfig {
     /// Admin listener for metrics and reload. Off unless set.
     #[serde(default)]
     pub admin: Option<AdminConfig>,
+    /// Debug capture of every request. For troubleshooting only; never in
+    /// production. Restart-only.
+    #[serde(default)]
+    pub debug: DebugConfig,
     /// Name of the vhost that answers requests whose Host matches no vhost.
     /// When unset, such requests get 421 Misdirected Request.
     #[serde(default)]
@@ -199,6 +203,52 @@ fn default_admin_allow() -> Vec<IpNet> {
         .into_iter()
         .filter_map(|s| IpNet::try_from(s.to_owned()).ok())
         .collect()
+}
+
+/// Debug capture (`[server.debug]`). See the threat model, T5.9 to T5.12.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DebugConfig {
+    /// Write a capture log with each connection's bytes at every layer wedge
+    /// sees (TCP, TLS, HTTP, routing), each step tagged with the source file
+    /// that handled it.
+    pub read_packet: bool,
+    /// Capture log path; relative paths are relative to the master file.
+    pub capture_file: PathBuf,
+    /// Also record IP/TCP packet headers (sequence numbers, flags, window,
+    /// retransmits) through pcap. Needs a build with the `packet-capture`
+    /// feature, libpcap or Npcap, and root/admin or CAP_NET_RAW.
+    pub tcp_headers: bool,
+    /// Write credentials (`Authorization`, `Cookie`, `Set-Cookie`,
+    /// `Proxy-Authorization` and `redact_headers`) unredacted. Breaks the
+    /// "secrets never reach logs" rule while on.
+    pub log_secrets: bool,
+    /// More header names to redact, besides the built-in ones.
+    pub redact_headers: Vec<String>,
+    /// Bytes recorded per connection and direction; the rest is counted only.
+    #[schemars(range(min = 0, max = 1_073_741_824))]
+    pub max_bytes_per_connection: u64,
+    /// Size at which the capture log is rotated.
+    #[schemars(range(min = 65_536, max = 17_179_869_184_u64))]
+    pub max_file_bytes: u64,
+    /// Rotated files kept (`capture.log.1` ...).
+    #[schemars(range(min = 1, max = 100))]
+    pub keep_files: u32,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self {
+            read_packet: false,
+            capture_file: PathBuf::from("capture.log"),
+            tcp_headers: false,
+            log_secrets: false,
+            redact_headers: Vec::new(),
+            max_bytes_per_connection: 64 * 1024,
+            max_file_bytes: 100 * 1024 * 1024,
+            keep_files: 5,
+        }
+    }
 }
 
 /// TLS protocol settings (`[server.tls]`). See the threat model, T3.1.
@@ -418,6 +468,18 @@ impl Config {
                         upstream.name
                     ));
                 }
+            }
+        }
+        let debug = &self.server.debug;
+        if !debug.read_packet && (debug.tcp_headers || debug.log_secrets) {
+            errors
+                .push("[server.debug] tcp_headers and log_secrets need read_packet = true".into());
+        }
+        for name in &debug.redact_headers {
+            if header_problem(name, "").is_some_and(|p| p == "invalid header name") {
+                errors.push(format!(
+                    "[server.debug] redact_headers: invalid header name {name:?}"
+                ));
             }
         }
         errors

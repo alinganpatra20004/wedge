@@ -23,6 +23,7 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 use tokio::sync::watch;
 use wedge_config::{Config, IpNet};
 
+use crate::capture::{here, Handled};
 use crate::metrics::{Metrics, OUTCOMES};
 use crate::path;
 use crate::response::{self, Body};
@@ -286,7 +287,11 @@ impl Proxy {
                 Ok(Ok(upstream_res)) => {
                     record("ok");
                     pool.success(backend);
-                    return into_client_response(upstream_res, pool.response_timeout);
+                    let handled = Handled {
+                        what: format!("proxy upstream={} server={}", pool.name, backend.addr),
+                        at: here!(),
+                    };
+                    return into_client_response(upstream_res, pool.response_timeout, handled);
                 }
                 Ok(Err(e)) if e.is_connect() => {
                     record("connect_error");
@@ -468,10 +473,15 @@ pub(crate) fn set_forwarding_headers(
     }
 }
 
-fn into_client_response(upstream: Response<Incoming>, idle: Duration) -> Response<Body> {
+fn into_client_response(
+    upstream: Response<Incoming>,
+    idle: Duration,
+    handled: Handled,
+) -> Response<Body> {
     let (mut parts, body) = upstream.into_parts();
     strip_hop_by_hop(&mut parts.headers);
     parts.extensions.insert(Proxied);
+    parts.extensions.insert(handled);
     Response::from_parts(parts, IdleBody::new(body, idle).boxed())
 }
 

@@ -23,6 +23,7 @@ use hyper::{Method, Response, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
+use crate::capture::{here, Handled};
 use crate::path::{self, Refusal};
 use crate::response::{self, Body};
 
@@ -78,6 +79,10 @@ pub(crate) async fn serve(
     let validators = Validators::new(meta.len(), meta.modified().ok(), encoding);
 
     let mut builder = Response::builder()
+        .extension(Handled {
+            what: format!("static file {}", file_path.display()),
+            at: here!(),
+        })
         .header(header::CONTENT_TYPE, content_type)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::ACCEPT_RANGES, "bytes")

@@ -4,6 +4,7 @@
 //! Core server for wedge: listeners, connection handling and request routing.
 
 mod admin;
+mod capture;
 mod files;
 mod headers;
 mod idle;
