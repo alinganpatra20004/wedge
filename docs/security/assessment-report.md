@@ -14,6 +14,37 @@ This report is filled in as each step completes; a section marked
 - Out of scope: the hosts wedge runs on, upstream applications behind the
   proxy, site content.
 
+## Method and tools
+
+Black-box tests ran against the release container image in Docker; white-
+box review covered the code, the dependency tree and the CI workflows. Each
+fix got a regression test and was re-tested against a rebuilt image.
+
+| Area | Tools |
+|---|---|
+| Supply chain | cargo-audit 0.22.2, cargo-deny 0.20.2, cargo-auditable 0.7.7, cargo-cyclonedx 0.5.9, Trivy 0.56.2 |
+| Static | clippy (Rust 1.99.1, pedantic and restriction lints), Semgrep 1.182.1, cargo-geiger 0.14.0 |
+| Dynamic | OWASP ZAP 2.15.0 baseline and 2.17.0 full scan, nikto 2.5.0, testssl.sh 3.2, curl 8.10.1, raw-socket scripts |
+| Robustness | Python 3.12 attack scripts (sockets, h2 4.1.0), cargo-fuzz with libFuzzer (nightly) |
+
+Severity: CVSS 3.1 base score where a network attack exists, otherwise a
+judgement of impact and likelihood, stated per finding.
+
+## OWASP Top 10 (2021) coverage
+
+| Category | What was tested | Findings |
+|---|---|---|
+| A01 Broken access control | traversal (104 payloads, fuzzing), hidden files, directory listing, symlinks, vhost/SNI binding, admin allow list and token | none |
+| A02 Cryptographic failures | testssl (protocols, ciphers, known attacks), TLS config, capture redaction | F-10 |
+| A03 Injection | ZAP active rules (SQL, OS command, XSS, CRLF, format string), header injection via path | none (wedge runs no interpreter; CR/LF never reaches headers) |
+| A04 Insecure design | arithmetic and indexing review, panic paths (`panic = "abort"`) | F-04 |
+| A05 Security misconfiguration | default headers, Host validation, limits, shipped configs | F-01, F-02, F-07, F-08, F-09 |
+| A06 Vulnerable components | cargo-audit on lockfile and binaries, Trivy on image and SBOM | none |
+| A07 Identification and authentication | admin token (constant-time compare, 401/405/421), no other authentication in scope | none |
+| A08 Software and data integrity | signatures, attestations, SBOM, CI action pinning | F-03, F-05 |
+| A09 Logging and monitoring | log flooding, log injection (escaped fields), secrets in logs | F-06, F-10 |
+| A10 SSRF | proxy targets fixed by config, absolute-form and `@` targets, CONNECT | none |
+
 ## Summary
 
 | Step | Status | High/critical findings |
@@ -21,7 +52,7 @@ This report is filled in as each step completes; a section marked
 | 7.1 Supply chain | done | none |
 | 7.2 Static analysis | done | none (2 findings fixed: F-04 Low, F-05 Medium) |
 | 7.3 Dynamic testing | done | none (3 Low findings fixed: F-06 to F-08; F-01, F-02 mitigated) |
-| 7.4 Robustness | pending | |
+| 7.4 Robustness | done | none (F-09 Medium and F-10 Medium fixed) |
 
 ## 7.1 Supply chain
 
@@ -128,6 +159,56 @@ returned 200 because the test site was a Windows folder mounted into Docker
 (case-insensitive). A client that half-closes its write side right after
 the request gets no response; that is hyper's default HTTP/1 behaviour.
 
+## 7.4 Robustness
+
+Limit tests ran from a Python 3.12 client container against the hardened
+wedge container (default limits: 10 s request head, 60 s idle, 30 s
+response, 1,024 connections, 16 KiB head, 100 headers), while a second
+client made a normal request every 0.5 s. An attack passes only if wedge
+enforces the limit and that normal client stays served. Final run on the
+image built at f07d829:
+
+| Attack | Result |
+|---|---|
+| Slowloris: 300 connections trickling header lines | all closed within 12.2 s; normal client 24/24 served, worst 0.06 s |
+| 200 connections that send nothing | all closed at 10.0 s (was 60 s, F-09); normal client unaffected |
+| 1,100 silent connections (over the 1,024 cap), then a normal request | served after 4.8 s (was 57.8 s before F-09) |
+| Connection flood, 1,200 connections | extra clients wait in the kernel backlog; normal requests during and after: 200 |
+| 101 and 1,000 headers; endless header bytes; one 20 KiB header | 431 each |
+| 100 MB declared body to a static route | 413 at once, connection closed (body not read) |
+| 10 MB declared and 10 MB chunked body to a proxy route (limit 1 KiB) | 413 at once |
+| Slow upload, 1 byte/s, through the proxy to an upstream that reads bodies | ended at 30.0 s with 504 (response timeout) |
+| HTTP/2: 500 concurrent streams on one connection (limit 100) | excess streams reset by wedge; server keeps serving |
+| HTTP/2 rapid reset (CVE-2023-44487): streams opened and cancelled in a loop | attacker connection closed at once; normal client unaffected |
+
+wedge's memory stayed between 14 and 40 MiB throughout.
+
+**F-09 (Medium, CVSS 3.1 5.3, AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L):**
+hyper's header timer starts with the first byte, so a plain-HTTP (or admin)
+connection that never sent anything held its connection slot until the
+idle timeout. 1,100 such connections, from one client and with almost no
+traffic, made a normal request wait 57.8 s, and reopening them kept the
+server unavailable. A new connection must now become readable within the
+shorter of the header and idle timeouts; TLS connections were already
+bounded by the handshake timeout. Fixed in f07d829 with two regression
+tests (`silent_connection_is_closed_after_header_timeout`,
+`silent_connections_do_not_lock_out_clients`).
+
+**F-10 (Medium):** found while writing the header fuzz target. The capture
+log holds back a partial line until its newline and released it unredacted
+once it passed 8 KiB. Header lines may be up to 16 KiB and arrive in
+TCP-sized reads, so an `Authorization` or `Cookie` value over 8 KiB, or a
+long query string, was written in clear text. Only relevant when
+`[server.debug] read_packet` is on (off by default, with warnings), but
+redaction is the feature's promise (T5.9). An over-long line is now judged
+by its start, redacted, and the rest dropped up to its newline. Fixed in
+d1981c2 with a regression test that splits a 9 KB token into 1,400-byte
+reads; the new `request_headers` fuzz target checks it for arbitrary splits.
+
+Fuzzing: the five targets ran for 15 minutes each (Docker
+`rust:1-bookworm`, nightly, cargo-fuzz, libFuzzer `-max_len=8192`); see
+the table below.
+
 ## Findings
 
 | ID | Title | Severity | OWASP / ASVS | Status |
@@ -140,8 +221,17 @@ the request gets no response; that is hyper's default HTTP/1 behaviour.
 | F-06 | Any client can add a rustls WARN log line per TLS handshake | Low | A09 / V7.1 | fixed 52b2bb3 (default filter `info,rustls=error`), verified on the image |
 | F-07 | Host with an invalid port, and absolute-form userinfo, accepted | Low | A05 / V5.1 | fixed 52b2bb3, unit tests, verified on the image |
 | F-08 | File served when named as a directory (`/page.html/`) | Low | A05 / V14.4 | fixed 52b2bb3, integration test, verified on the image |
+| F-09 | Silent connections hold slots until the idle timeout (lock-out) | Medium (CVSS 3.1 5.3) | A05 / V11.1.4 (T2.5) | fixed f07d829, 2 tests, verified in Docker (57.8 s to 4.8 s) |
+| F-10 | Capture log released credential lines over 8 KiB unredacted | Medium | A02, A09 / V7.1.1 (T5.9) | fixed d1981c2, regression test, fuzz target |
 
 ## Residual risks
+
+- Connection exhaustion is bounded, not eliminated: one client can still
+  hold all `max_connections` slots for up to the header timeout (10 s) at a
+  time, or for up to the response timeout with slow uploads to a proxy
+  route. There is no per-client connection limit yet; behind a load
+  balancer or on a public host, lower the timeouts or put a per-IP limit in
+  front.
 
 - No Cross-Origin-Embedder-Policy / Cross-Origin-Opener-Policy by default
   (ZAP 90004, Low). They only matter for pages that need cross-origin
