@@ -8,6 +8,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+#[cfg(windows)]
+mod service;
+
 /// wedge: web and application server.
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -39,6 +42,33 @@ enum Command {
     },
     /// Print the configuration JSON Schema.
     Schema,
+    /// Install, remove or run wedge as a Windows service.
+    #[cfg(windows)]
+    Service {
+        #[command(subcommand)]
+        action: ServiceCommand,
+    },
+}
+
+#[cfg(windows)]
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Register the "wedge" service (run from an elevated prompt).
+    Install {
+        /// Path to the master configuration file.
+        #[arg(short, long, default_value = "wedge.toml")]
+        config: PathBuf,
+    },
+    /// Stop and remove the "wedge" service.
+    Uninstall,
+    /// Entry point used by the Service Control Manager.
+    #[command(hide = true)]
+    Run {
+        #[arg(short, long)]
+        config: PathBuf,
+        #[arg(long)]
+        log_file: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -61,6 +91,21 @@ fn main() -> ExitCode {
             }
         },
         Command::Reload { config } => reload(&config),
+        #[cfg(windows)]
+        Command::Service { action } => {
+            let result = match action {
+                ServiceCommand::Install { config } => service::install(&config),
+                ServiceCommand::Uninstall => service::uninstall(),
+                ServiceCommand::Run { config, log_file } => service::run(config, log_file),
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Schema => {
             let schema = wedge_config::json_schema();
             match serde_json::to_string_pretty(&schema) {
@@ -79,7 +124,20 @@ fn main() -> ExitCode {
 
 /// Loads the configuration and serves until SIGINT or SIGTERM (Ctrl+C on Windows).
 fn run(config_path: &std::path::Path) -> ExitCode {
-    init_logging();
+    if let Err(e) = init_logging(None) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    serve(config_path, shutdown_signal(), |_, _| {})
+}
+
+/// Loads the configuration, binds, and serves until `shutdown` completes.
+/// `ready` receives the reloader and the runtime once the server listens.
+fn serve(
+    config_path: &std::path::Path,
+    shutdown: impl std::future::Future<Output = ()>,
+    ready: impl FnOnce(wedge_core::Reloader, tokio::runtime::Handle),
+) -> ExitCode {
     let config = match wedge_config::load(config_path) {
         Ok(config) => config,
         Err(e) => {
@@ -117,7 +175,8 @@ fn run(config_path: &std::path::Path) -> ExitCode {
         }
         #[cfg(unix)]
         tokio::spawn(reload_on_sighup(server.reloader()));
-        server.run(shutdown_signal()).await;
+        ready(server.reloader(), tokio::runtime::Handle::current());
+        server.run(shutdown).await;
         ExitCode::SUCCESS
     })
 }
@@ -212,21 +271,43 @@ fn reload(config_path: &std::path::Path) -> ExitCode {
     }
 }
 
-/// Logs to stderr. Filter with RUST_LOG (default info); JSON output with
+/// Logs to stderr, or appends to `file` (used by the Windows service, which
+/// has no console). Filter with RUST_LOG (default info); JSON output with
 /// WEDGE_LOG_FORMAT=json. Access lines use target `wedge::access`, so
 /// `RUST_LOG=info,wedge::access=off` keeps only the error log.
-fn init_logging() {
+fn init_logging(file: Option<&std::path::Path>) -> Result<(), String> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()));
-    if std::env::var("WEDGE_LOG_FORMAT").is_ok_and(|v| v == "json") {
-        builder.json().init();
-    } else {
-        builder.init();
+    let json = std::env::var("WEDGE_LOG_FORMAT").is_ok_and(|v| v == "json");
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    match file {
+        Some(path) => {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| format!("cannot open log file {}: {e}", path.display()))?;
+            let builder = builder
+                .with_writer(std::sync::Mutex::new(file))
+                .with_ansi(false);
+            if json {
+                builder.json().init();
+            } else {
+                builder.init();
+            }
+        }
+        None => {
+            let builder = builder
+                .with_writer(std::io::stderr)
+                .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()));
+            if json {
+                builder.json().init();
+            } else {
+                builder.init();
+            }
+        }
     }
+    Ok(())
 }
 
 async fn shutdown_signal() {
