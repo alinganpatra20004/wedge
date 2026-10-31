@@ -2,8 +2,10 @@
 
 <p align="center">A web and application server in Rust: static sites, TLS, reverse proxy and metrics in one memory-safe binary, with safe defaults.</p>
 
-> Status: version 0.1.0, the first release. Security assessment of the
-> released build is in progress; see [SECURITY.md](SECURITY.md).
+> Status: version 0.1.1, a security update to the first release. The
+> [security assessment](docs/security/assessment-report.md) of the build
+> found no high or critical issues; its fixes are in this release. See
+> [SECURITY.md](SECURITY.md) to report a problem.
 
 ## Features
 
