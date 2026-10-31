@@ -10,6 +10,17 @@
 set -eu
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 export VERSION
+# GPG_PRIVATE_KEY (armored, from the release workflow's secret) signs the
+# packages. It is written to a private temporary file, never printed.
+NFPM_SIGNING_KEY_FILE=""
+if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+    umask 077
+    NFPM_SIGNING_KEY_FILE=$(mktemp)
+    printf '%s\n' "$GPG_PRIVATE_KEY" > "$NFPM_SIGNING_KEY_FILE"
+    trap 'rm -f "$NFPM_SIGNING_KEY_FILE"' EXIT
+    echo "signing packages"
+fi
+export NFPM_SIGNING_KEY_FILE
 for pair in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do
     ARCH=${pair%%:*}
     TARGET=${pair#*:}

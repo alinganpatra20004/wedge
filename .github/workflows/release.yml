@@ -36,7 +36,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y pandoc
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -SkipWindows
-      - run: docker run --rm -v "$PWD:/src" -w /src --entrypoint sh goreleaser/nfpm:v2.41.1 scripts/package-linux.sh
+      # Signs the .deb/.rpm with the project key (public half:
+      # packaging/wedge-release.asc). The key never leaves the environment.
+      - env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: docker run --rm -e GPG_PRIVATE_KEY -v "$PWD:/src" -w /src --entrypoint sh goreleaser/nfpm:v2.41.1 scripts/package-linux.sh
       - run: sh scripts/build-oci.sh amd64 && sh scripts/build-oci.sh arm64
       - uses: actions/upload-artifact@v4
         with:
@@ -52,6 +56,37 @@ jobs:
       - run: choco install pandoc -y --no-progress
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -SkipLinux
+      - run: pwsh scripts/build-msi.ps1
+      # Real install, service start, HTTP check and uninstall on the runner.
+      - run: pwsh scripts/test-msi.ps1 (Get-ChildItem build/*.msi).FullName
+      # Authenticode signing through SignPath Foundation (threat model T6.1).
+      # Off until the project is approved and SIGNPATH_API_TOKEN exists.
+      - id: unsigned
+        if: env.SIGNPATH_API_TOKEN != ''
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: |
+            build/*.msi
+            build/*.zip
+      - if: env.SIGNPATH_API_TOKEN != ''
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: wedge
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: build/signed
+      - if: env.SIGNPATH_API_TOKEN != ''
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: Copy-Item -Force build/signed/* build/
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -86,6 +121,16 @@ jobs:
           merge-multiple: true
       - run: pwsh scripts/build-all.ps1 -ChecksumsOnly
       - run: cd build && sha256sum -c SHA256SUMS
+      - run: cp packaging/wedge-release.asc build/
+      # Sigstore keyless signatures: each asset gets <file>.sigstore.json,
+      # verifiable with `cosign verify-blob` against this workflow's identity.
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@v3
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          for f in $(find build -maxdepth 1 -type f ! -name '*.sigstore.json'); do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
       - if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@v2
         with:

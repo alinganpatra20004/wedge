@@ -73,3 +73,13 @@ overrides:
     depends: [passwd]
   rpm:
     depends: [shadow-utils]
+
+# Signed when scripts/package-linux.sh finds GPG_PRIVATE_KEY (the release
+# workflow); local builds leave NFPM_SIGNING_KEY_FILE empty and are unsigned.
+# Public key: packaging/wedge-release.asc.
+deb:
+  signature:
+    key_file: ${NFPM_SIGNING_KEY_FILE}
+rpm:
+  signature:
+    key_file: ${NFPM_SIGNING_KEY_FILE}

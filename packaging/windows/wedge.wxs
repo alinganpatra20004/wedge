@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright (c) Alingan Patra -->
+<!--
+  wEdge Windows installer (WiX 5). Built by scripts/build-msi.ps1.
+
+  - Installs wedge.exe and the docs to Program Files\wedge (fixed location:
+    the service refuses binaries elsewhere, threat model T6.7).
+  - Puts a default configuration and test page in ProgramData\wedge; they are
+    kept on upgrade and uninstall (they are the administrator's files).
+  - Registers and starts the "wedge" service through `wedge service install`,
+    which runs it as NT SERVICE\wedge and restricts folder permissions
+    (T5.7, T5.8); uninstall removes the service the same way.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="wEdge"
+           Manufacturer="Alingan Patra"
+           Version="$(var.Version)"
+           UpgradeCode="967BB0DA-8140-4650-9D03-169EEA37A554"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="wEdge web and application server" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of wEdge is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="wedge.ico" SourceFile="$(var.BrandDir)\wedge.ico" />
+    <Property Id="ARPPRODUCTICON" Value="wedge.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/alinganpatra20004/wedge" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/alinganpatra20004/wedge/blob/main/docs/guide/README.md" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.BrandDir)\msi-banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.BrandDir)\msi-dialog.bmp" />
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="wedge">
+        <Directory Id="DocsFolder" Name="docs" />
+        <Directory Id="ExamplesFolder" Name="examples" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DataFolder" Name="wedge">
+        <Directory Id="WwwFolder" Name="www" />
+        <Directory Id="ConfDFolder" Name="conf.d" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="wEdge" Level="1">
+      <Component Directory="INSTALLFOLDER">
+        <File Id="WedgeExe" Source="$(var.BuildDir)\wedge.exe" KeyPath="yes" />
+        <!-- `wedge` works from any terminal. -->
+        <Environment Id="Path" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Source="$(var.BuildDir)\LICENSE" />
+        <File Source="$(var.BuildDir)\NOTICE" />
+        <File Source="$(var.BuildDir)\README.md" />
+      </Component>
+      <Files Include="$(var.BuildDir)\docs\**" Directory="DocsFolder" />
+      <Files Include="$(var.BuildDir)\examples\**" Directory="ExamplesFolder" />
+
+      <!-- The administrator's configuration: never overwritten, never removed. -->
+      <Component Directory="DataFolder" NeverOverwrite="yes" Permanent="yes">
+        <File Id="Config" Source="$(var.ConfigFile)" Name="wedge.toml" />
+      </Component>
+      <Component Directory="WwwFolder" NeverOverwrite="yes" Permanent="yes">
+        <File Id="TestPage" Source="$(var.TestPage)" Name="index.html" />
+      </Component>
+      <Component Directory="ConfDFolder" Permanent="yes">
+        <CreateFolder />
+      </Component>
+    </Feature>
+
+    <!-- Service registration reuses the tested `wedge service` commands. -->
+    <CustomAction Id="InstallService" FileRef="WedgeExe"
+                  ExeCommand='service install --config "[DataFolder]wedge.toml"'
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="StartService" Directory="INSTALLFOLDER"
+                  ExeCommand='"[System64Folder]sc.exe" start wedge'
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="UninstallService" FileRef="WedgeExe"
+                  ExeCommand="service uninstall"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="UninstallService" Before="RemoveFiles" Condition='REMOVE="ALL"' />
+      <Custom Action="InstallService" After="InstallFiles" Condition='NOT REMOVE' />
+      <Custom Action="StartService" After="InstallService" Condition='NOT REMOVE' />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

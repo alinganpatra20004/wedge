@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# wEdge configuration installed by the Windows installer. Upgrades and
+# uninstall keep your edits. Check changes with:
+#   wedge check-config -c C:\ProgramData\wedge\wedge.toml
+# then apply them with:  sc.exe control wedge paramchange
+#
+# Out of the box wedge listens on loopback only. To serve the network,
+# change listen below (for example "0.0.0.0:80") and allow the port in
+# Windows Defender Firewall. Files in conf.d\ are merged after this one.
+
+[server]
+listen = ["127.0.0.1:8080"]
+default_vhost = "default"
+
+[[vhost]]
+name = "default"
+root = "www"
