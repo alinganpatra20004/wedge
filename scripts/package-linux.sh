@@ -14,7 +14,8 @@ export VERSION
 # packages. It is written to a private temporary file, never printed.
 NFPM_SIGNING_KEY_FILE=""
 if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
-    umask 077
+    # mktemp creates the file 0600; the umask is not changed, so the
+    # packages built below stay readable.
     NFPM_SIGNING_KEY_FILE=$(mktemp)
     printf '%s\n' "$GPG_PRIVATE_KEY" > "$NFPM_SIGNING_KEY_FILE"
     trap 'rm -f "$NFPM_SIGNING_KEY_FILE"' EXIT

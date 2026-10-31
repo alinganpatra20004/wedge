@@ -69,7 +69,8 @@
       <Component Directory="WwwFolder" NeverOverwrite="yes" Permanent="yes">
         <File Id="TestPage" Source="$(var.TestPage)" Name="index.html" />
       </Component>
-      <Component Directory="ConfDFolder" Permanent="yes">
+      <!-- An empty folder has no key file, so it needs a fixed id and GUID. -->
+      <Component Id="ConfDFolder" Directory="ConfDFolder" Guid="BD3532F6-A852-4AD1-9676-1FD0BC1E3316" Permanent="yes">
         <CreateFolder />
       </Component>
     </Feature>
