@@ -15,4 +15,4 @@ rules:
       - pattern-not-inside: |
           mod tests { ... }
     paths:
-      include: ["crates/wedge-core/src/", "crates/wedge-config/src/"]
+      include: ["**/crates/wedge-core/src/", "**/crates/wedge-config/src/"]

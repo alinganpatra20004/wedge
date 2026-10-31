@@ -44,11 +44,25 @@ fn log_dir() -> PathBuf {
     PathBuf::from(base).join("wedge").join("logs")
 }
 
-/// Registers the service (needs an elevated prompt).
-pub(crate) fn install(config: &Path) -> Result<(), String> {
+/// Registers the service (needs an elevated prompt). The binary must live
+/// under Program Files unless `allow_unprotected` is set: a service whose
+/// executable ordinary users can replace runs their code (binary planting).
+pub(crate) fn install(config: &Path, allow_unprotected: bool) -> Result<(), String> {
     let config = std::path::absolute(config).map_err(|e| format!("{}: {e}", config.display()))?;
     wedge_config::load(&config).map_err(|e| e.to_string())?;
+    // Used only as the path to register: the administrator chose to run this
+    // binary, and the location check below rejects user-writable places.
+    // nosemgrep: rust.lang.security.current-exe.current-exe
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = std::fs::canonicalize(&exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    if !allow_unprotected && !in_program_files(&exe) {
+        return Err(format!(
+            "{} is not under Program Files, so other users may be able to replace it.\n\
+             Copy wedge.exe to \"C:\\Program Files\\wedge\\\" and install from there, \
+             or pass --allow-unprotected-path for a test setup.",
+            exe.display().to_string().trim_start_matches(r"\\?\")
+        ));
+    }
     let logs = log_dir();
     std::fs::create_dir_all(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
     let manager = ServiceManager::local_computer(
@@ -91,6 +105,16 @@ pub(crate) fn install(config: &Path) -> Result<(), String> {
     println!("log:    {}", logs.join("wedge.log").display());
     println!("start it with: Start-Service {NAME}");
     Ok(())
+}
+
+/// Whether `exe` (canonical) is inside a Program Files directory, which
+/// only administrators can modify by default.
+fn in_program_files(exe: &Path) -> bool {
+    ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .filter_map(|dir| std::fs::canonicalize(dir).ok())
+        .any(|dir| exe.starts_with(dir))
 }
 
 /// Gives the service account `rights` on `path` with icacls.

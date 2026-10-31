@@ -58,6 +58,10 @@ enum ServiceCommand {
         /// Path to the master configuration file.
         #[arg(short, long, default_value = "wedge.toml")]
         config: PathBuf,
+        /// Allow a wedge.exe outside Program Files (test setups only: other
+        /// users may be able to replace the binary the service runs).
+        #[arg(long)]
+        allow_unprotected_path: bool,
     },
     /// Stop and remove the "wedge" service.
     Uninstall,
@@ -94,7 +98,10 @@ fn main() -> ExitCode {
         #[cfg(windows)]
         Command::Service { action } => {
             let result = match action {
-                ServiceCommand::Install { config } => service::install(&config),
+                ServiceCommand::Install {
+                    config,
+                    allow_unprotected_path,
+                } => service::install(&config, allow_unprotected_path),
                 ServiceCommand::Uninstall => service::uninstall(),
                 ServiceCommand::Run { config, log_file } => service::run(config, log_file),
             };
