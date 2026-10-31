@@ -70,3 +70,25 @@ Defects found by the new tests during Phase 4 and fixed before the gate:
 
 Known limitations (documented, not defects): no TLS to upstreams, no
 WebSocket/`Upgrade` tunnelling, HTTP/1.1 only to upstreams.
+
+## Phase 5 gate (commit 3962bce, 2026-10-31)
+
+| Check | Tool | Result |
+|---|---|---|
+| Lints and tests | rustfmt, clippy `-D warnings`, `cargo test` (admin, reload, capture and CLI wire tests) | pass on Linux, Windows, macOS; MSRV 1.80 `cargo check` passes; new `packet-capture` job (libpcap-dev) passes |
+| Known vulnerabilities | cargo-audit 0.22.2, cargo-deny 0.20.2 | no advisories; licenses clean with and without `packet-capture` |
+| Static analysis | Semgrep 1.182.1 | 1 finding: `rust.lang.security.current-exe` in `wedge service install`; fixed in b020e27 (install refuses a binary outside Program Files unless `--allow-unprotected-path`); then no findings |
+| Fuzzing, 300 s per target, Docker `rust:1-bookworm`, nightly | cargo-fuzz | no crashes: `config_parse` 216,084 runs, `proxy_request` 569,639, `request_path` 980,434, `secret_ref` 41,241,620 |
+| systemd unit | systemd 252 `systemd-analyze verify` / `security` (Debian 12 container) | verify passes; exposure 1.6 "OK" |
+| Packet capture | live run as root in Debian 12 container | full handshake, data and FIN segments recorded with seq/ack/flags/window; credential absent from the log |
+| Capture log on Windows | real binary on this host | redaction in parsed and raw views; file ACL `OWNER RIGHTS:(F)` only |
+
+Not yet tested (needs the user):
+
+- `wedge service install` / `uninstall` on a real Windows machine (needs an
+  elevated prompt). Code paths compile and run in CI; the refusal path for an
+  unprotected binary location was exercised.
+
+Known limitations: metrics counters restart from zero after a reload; the
+409 response for a concurrent reload is implemented but not separately
+tested; capture queue overflow is implemented but not separately tested.
