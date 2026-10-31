@@ -53,9 +53,14 @@
         <!-- `wedge` works from any terminal. -->
         <Environment Id="Path" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
       </Component>
+      <!-- One file per component, so each gets a stable automatic GUID. -->
       <Component Directory="INSTALLFOLDER">
         <File Source="$(var.BuildDir)\LICENSE" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
         <File Source="$(var.BuildDir)\NOTICE" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
         <File Source="$(var.BuildDir)\README.md" />
       </Component>
       <Files Include="$(var.BuildDir)\docs\**" Directory="DocsFolder" />
