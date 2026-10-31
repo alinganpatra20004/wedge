@@ -39,5 +39,6 @@ wix build packaging/windows/wedge.wxs -arch x64 `
     -d "TestPage=$(Get-Full packaging/linux/www/index.html)" `
     -o $msi
 if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
-Remove-Item $rtf
+# The .wixpdb is WiX debug data, not something to ship.
+Remove-Item $rtf, ([IO.Path]::ChangeExtension($msi, '.wixpdb')) -ErrorAction SilentlyContinue
 Get-Item $msi | Format-Table Name, Length -AutoSize
