@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# One definition for the .deb and .rpm packages (nfpm). Built by
+# scripts/package-linux.sh, which sets VERSION and ARCH (amd64 or arm64) and
+# stages that architecture's musl binary at build/.pkg/wedge.
+
+name: wedge
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: 1
+section: web
+priority: optional
+maintainer: Alingan Patra <alinganpatra20004@users.noreply.github.com>
+vendor: Alingan Patra
+homepage: https://github.com/alinganpatra20004/wedge
+license: Apache-2.0
+description: |
+  wedge web and application server.
+  Static files, virtual hosts, TLS (rustls), reverse proxy, Prometheus
+  metrics and hot configuration reload, in one memory-safe binary.
+
+contents:
+  # Static musl binary: runs on every glibc or musl distribution.
+  - src: build/.pkg/wedge
+    dst: /usr/bin/wedge
+    file_info:
+      mode: 0755
+  - src: packaging/systemd/wedge.service
+    dst: /usr/lib/systemd/system/wedge.service
+    file_info:
+      mode: 0644
+  # The admin's configuration: never overwritten on upgrade (T6.4).
+  - src: packaging/linux/wedge.toml
+    dst: /etc/wedge/wedge.toml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+  - dst: /etc/wedge/conf.d
+    type: dir
+    file_info:
+      mode: 0750
+  - src: packaging/linux/www/index.html
+    dst: /usr/share/wedge/www/index.html
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/wedge/LICENSE
+  - src: NOTICE
+    dst: /usr/share/doc/wedge/NOTICE
+  - src: README.md
+    dst: /usr/share/doc/wedge/README.md
+  - src: examples
+    dst: /usr/share/doc/wedge/examples
+    type: tree
+
+scripts:
+  preinstall: packaging/linux/preinstall.sh
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh
+
+overrides:
+  deb:
+    depends: [passwd]
+  rpm:
+    depends: [shadow-utils]

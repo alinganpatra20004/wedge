@@ -9,3 +9,4 @@
 *.key
 .vscode/
 .idea/
+/build/

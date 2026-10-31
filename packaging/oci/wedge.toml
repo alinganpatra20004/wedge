@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Default configuration in the container image. Inside a container wedge must
+# listen on all interfaces; publish the port with `-p` to choose exposure.
+# Replace this file by mounting your own /etc/wedge.
+
+[server]
+listen = ["0.0.0.0:8080"]
+default_vhost = "default"
+
+[[vhost]]
+name = "default"
+root = "/srv/www"

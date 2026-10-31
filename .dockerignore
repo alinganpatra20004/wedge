@@ -1,0 +1,13 @@
+target
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+.git
+.agent
+.claude
+CLAUDE.md
+build/*.tar
+build/*.tar.gz
+build/*.zip
+build/*.deb
+build/*.rpm
