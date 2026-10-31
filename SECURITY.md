@@ -57,10 +57,25 @@ do not remove it.
 
 ## Verifying downloads
 
-Every release asset is listed in `SHA256SUMS` and has a GitHub build
-provenance attestation:
+Every release asset is listed in `SHA256SUMS`, has a GitHub build
+provenance attestation and a Sigstore signature (`<file>.sigstore.json`):
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 gh attestation verify <file> --repo alinganpatra20004/wedge
+cosign verify-blob <file> --bundle <file>.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/alinganpatra20004/wedge/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The .deb and .rpm packages are also GPG-signed. The public key is
+[`packaging/wedge-release.asc`](packaging/wedge-release.asc), fingerprint
+`B84A 920D B6B5 11E6 46B1 24FD 983E F3CD D108 E023`:
+
+```sh
+sudo rpm --import wedge-release.asc && rpm -K wedge-*.rpm
+```
+
+The Windows installer will be Authenticode-signed once the project's
+SignPath Foundation application is approved; until then Windows reports an
+unknown publisher.

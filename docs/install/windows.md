@@ -4,48 +4,39 @@
 
 # Install wedge on Windows 10/11 and Windows Server (x86_64)
 
-> Untested: these steps have not yet been run on a clean machine or VM.
+> Untested on a real machine. The MSI is tested on a GitHub-hosted Windows Server runner by `scripts/test-msi.ps1` in every release build (silent install, service start, HTTP check, uninstall); a Windows 10/11 desktop or VM run is still to be confirmed.
 
 ## 1. Download and verify
 
 In PowerShell:
 
 ```powershell
-$VERSION = '0.1.0'
-$BASE = "https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION"
-
-Invoke-WebRequest "$BASE/wedge-$VERSION-x86_64-pc-windows-msvc.zip" -OutFile wedge.zip
-
+$BASE = "https://github.com/alinganpatra20004/wedge/releases/download/v0.1.0"
+Invoke-WebRequest "$BASE/wedge-0.1.0-x86_64.msi" -OutFile wedge-0.1.0-x86_64.msi
 Invoke-WebRequest "$BASE/SHA256SUMS" -OutFile SHA256SUMS
-
-$expected = (Select-String SHA256SUMS -Pattern 'windows-msvc.zip').Line.Split(' ')[0]
-
-if ((Get-FileHash wedge.zip -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'checksum mismatch' }
+$expected = (Select-String SHA256SUMS -Pattern ' wedge-0.1.0-x86_64.msi$').Line.Split(' ')[0]
+if ((Get-FileHash wedge-0.1.0-x86_64.msi -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'checksum mismatch' }
 ```
 
-## 2. Install (elevated PowerShell)
+## 2. Install
 
-The service refuses a binary outside Program Files, because other users could
-replace it.
+Double-click `wedge-0.1.0-x86_64.msi`, or from an elevated PowerShell (`/qn` for a silent install):
 
 ```powershell
-Expand-Archive wedge.zip -DestinationPath $env:TEMP\wedge
-
-New-Item -ItemType Directory 'C:\Program Files\wedge', 'C:\ProgramData\wedge' -Force | Out-Null
-
-Copy-Item $env:TEMP\wedge\wedge.exe 'C:\Program Files\wedge\'
-
-Copy-Item -Recurse $env:TEMP\wedge\examples\* 'C:\ProgramData\wedge\'
-
-& 'C:\Program Files\wedge\wedge.exe' check-config -c C:\ProgramData\wedge\wedge.toml
-
-& 'C:\Program Files\wedge\wedge.exe' service install -c C:\ProgramData\wedge\wedge.toml
-
-Start-Service wedge
+msiexec /i wedge-0.1.0-x86_64.msi
 ```
 
-The service runs as the virtual account `NT SERVICE\wedge` and logs to
-`C:\ProgramData\wedge\logs\wedge.log`.
+The installer:
+
+- installs `wedge.exe`, the user guide and examples to `C:\Program Files\wedge` and
+  adds it to `PATH`;
+- creates `C:\ProgramData\wedge\wedge.toml` (loopback only, port 8080) and a test
+  page; upgrades and uninstall keep them;
+- registers and starts the `wedge` service as the virtual account `NT SERVICE\wedge`,
+  logging to `C:\ProgramData\wedge\logs\wedge.log`.
+
+Until the installer is Authenticode-signed (pending SignPath Foundation approval),
+Windows SmartScreen reports an unknown publisher; check the SHA-256 above first.
 
 ## 3. Check
 
@@ -53,10 +44,29 @@ The service runs as the virtual account `NT SERVICE\wedge` and logs to
 curl.exe -I http://127.0.0.1:8080/
 ```
 
-## Reload and remove
+## Configure and reload
 
 ```powershell
-sc.exe control wedge paramchange   # reload the configuration
+notepad C:\ProgramData\wedge\wedge.toml
+wedge check-config -c C:\ProgramData\wedge\wedge.toml
+sc.exe control wedge paramchange
+```
 
-& 'C:\Program Files\wedge\wedge.exe' service uninstall
+To serve the network, change `listen` (for example `"0.0.0.0:80"`) and allow the
+port in Windows Defender Firewall.
+
+## Remove
+
+Settings > Apps > wEdge > Uninstall, or `msiexec /x wedge-0.1.0-x86_64.msi`. The configuration in
+`C:\ProgramData\wedge` is kept.
+
+## Portable zip (no installer)
+
+`wedge-0.1.0-x86_64-pc-windows-msvc.zip` contains the same files. Copy
+`wedge.exe` to `C:\Program Files\wedge\` (the service refuses other locations),
+then from an elevated PowerShell:
+
+```powershell
+& 'C:\Program Files\wedge\wedge.exe' service install -c C:\ProgramData\wedge\wedge.toml
+Start-Service wedge
 ```

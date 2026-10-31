@@ -78,8 +78,8 @@
       "id": "windows",
       "title": "Windows 10/11 and Windows Server (x86_64)",
       "kind": "windows",
-      "tested": "untested",
-      "asset": "wedge-${VERSION}-x86_64-pc-windows-msvc.zip"
+      "tested": "ci-runner",
+      "asset": "wedge-${VERSION}-x86_64.msi"
     },
     {
       "id": "macos",

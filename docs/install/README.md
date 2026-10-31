@@ -16,7 +16,7 @@ they have been run on a real machine.
 | Fedora 40 | [fedora-40.md](fedora-40.md) | Tested |
 | RHEL 9 and compatible (Rocky Linux, AlmaLinux) | [rhel-9.md](rhel-9.md) | Tested |
 | Alpine Linux 3.20 | [alpine-3.20.md](alpine-3.20.md) | Tested |
-| Windows 10/11 and Windows Server (x86_64) | [windows.md](windows.md) | Untested |
+| Windows 10/11 and Windows Server (x86_64) | [windows.md](windows.md) | Untested (MSI tested in CI) |
 | macOS (Apple silicon and Intel) | [macos.md](macos.md) | Untested |
 
 Other Linux distributions: use the static `x86_64-unknown-linux-musl` or
