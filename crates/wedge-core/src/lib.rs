@@ -9,7 +9,11 @@ mod files;
 mod headers;
 mod idle;
 mod metrics;
+#[cfg(any(test, feature = "packet-capture"))]
+mod packet;
 mod path;
+#[cfg(feature = "packet-capture")]
+mod pcap_capture;
 mod proxy;
 mod response;
 mod server;

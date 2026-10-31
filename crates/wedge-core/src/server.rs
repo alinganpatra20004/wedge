@@ -289,6 +289,9 @@ impl Server {
         if capture.is_some() {
             warn_capture_on(&config.server.debug);
         }
+        if let (Some(c), true) = (&capture, config.server.debug.tcp_headers) {
+            start_packet_capture(c, &listeners);
+        }
         Ok(Self {
             listeners,
             shared: Arc::new(Shared {
@@ -697,6 +700,28 @@ async fn handle(state: &State, req: Request<Incoming>, info: &ConnInfo) -> Respo
     }
     entry.log(&response, elapsed);
     response
+}
+
+/// Starts IP/TCP header capture on the public listeners' ports (T5.11).
+/// Failure is logged and the server runs on without packet headers.
+fn start_packet_capture(capture: &Arc<Capture>, listeners: &[(TcpListener, Kind)]) {
+    let public: Vec<SocketAddr> = listeners
+        .iter()
+        .filter(|(_, kind)| *kind != Kind::Admin)
+        .filter_map(|(l, _)| l.local_addr().ok())
+        .collect();
+    #[cfg(feature = "packet-capture")]
+    if let Err(e) = crate::pcap_capture::start(Arc::clone(capture), &public) {
+        tracing::error!("{e}; continuing without packet headers");
+    }
+    #[cfg(not(feature = "packet-capture"))]
+    {
+        let _ = (capture, public);
+        tracing::error!(
+            "tcp_headers needs a wedge build with the packet-capture feature; \
+             continuing without packet headers"
+        );
+    }
 }
 
 /// Logs a loud warning that capture is on (T5.9).

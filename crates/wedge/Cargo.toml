@@ -22,6 +22,10 @@ wedge-core = { path = "../wedge-core", version = "0.1.0" }
 [lints]
 workspace = true
 
+[features]
+# See wedge-core: IP/TCP header capture through libpcap/Npcap.
+packet-capture = ["wedge-core/packet-capture"]
+
 [dev-dependencies]
 tempfile = "3.27.0"
 

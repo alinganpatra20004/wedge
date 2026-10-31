@@ -20,6 +20,7 @@ http-body-util = "0.1.5"
 httpdate = "1.0.3"
 hyper = { version = "1.12.0", features = ["server", "http1", "http2", "client"] }
 hyper-util = { version = "0.1.20", features = ["tokio", "server", "server-auto", "server-graceful", "http1", "http2", "client-legacy"] }
+pcap = { version = "2.5.0", optional = true }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
 thiserror = "2.0.21"
@@ -29,6 +30,11 @@ tokio-util = { version = "0.7.19", features = ["io"] }
 tracing = "0.1.44"
 webpki = { version = "0.103.16", package = "rustls-webpki", default-features = false, features = ["std", "ring"] }
 wedge-config = { version = "0.1.0", path = "../wedge-config" }
+
+[features]
+# IP/TCP header capture for [server.debug] tcp_headers. Needs libpcap (Linux,
+# macOS) or the Npcap SDK (Windows) at build time and Npcap at run time.
+packet-capture = ["dep:pcap"]
 
 [dev-dependencies]
 bytes = "1.12.1"
