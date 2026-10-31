@@ -1,0 +1,34 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# OpenRC service for wedge (Alpine and other OpenRC systems). Install to
+# /etc/init.d/wedge, then: rc-update add wedge default && rc-service wedge start
+# `rc-service wedge reload` sends SIGHUP (configuration reload).
+
+name="wedge"
+description="wedge web and application server"
+command="/usr/local/bin/wedge"
+command_args="run -c /etc/wedge/wedge.toml"
+command_user="wedge:wedge"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/wedge.log"
+error_log="/var/log/wedge.log"
+extra_started_commands="reload"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --file --owner wedge:wedge --mode 0640 /var/log/wedge.log
+    /usr/local/bin/wedge check-config -c /etc/wedge/wedge.toml
+}
+
+reload() {
+    ebegin "Reloading ${RC_SVCNAME}"
+    start-stop-daemon --signal HUP --pidfile "${pidfile}"
+    eend $?
+}

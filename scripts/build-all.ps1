@@ -52,6 +52,7 @@ function New-Layout([string]$Target, [string]$Binary) {
     if (Test-Path docs/guide) { Copy-Item -Recurse docs/guide (Join-Path $dir 'docs') }
     if ($Target -like '*linux*') {
         Copy-Item packaging/systemd/wedge.service $dir
+        Copy-Item -Recurse packaging/openrc (Join-Path $dir 'openrc')
     }
     return $dir
 }
@@ -94,6 +95,9 @@ if (-not $SkipLinux) {
     $copy = ($linuxTargets | ForEach-Object {
             "mkdir -p /out/$_ && cp /t/$_/release/wedge /out/$_/wedge"
         }) -join ' && '
+    # Files written by the container are root-owned on Linux hosts; let the
+    # calling user remove them afterwards.
+    $copy += ' && chmod -R a+rwX /out'
     Invoke-Checked {
         docker run --rm -v wedge-zig-target:/t:ro -v "${out}:/out" debian:bookworm-slim sh -c $copy
     } 'Copying Linux binaries'

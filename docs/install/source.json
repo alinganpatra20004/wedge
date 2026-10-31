@@ -1,0 +1,92 @@
+{
+  "_comment": "SPDX-License-Identifier: Apache-2.0. Copyright (c) Alingan Patra. Single source for the install guides: scripts/gen-install-docs.ps1 writes docs/install/*.md from it and scripts/test-install.ps1 runs the same steps in clean containers. Commands use $VERSION and $BASE (the release download URL).",
+  "base_url": "https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION",
+  "platforms": [
+    {
+      "id": "debian-12",
+      "title": "Debian 12 (bookworm)",
+      "image": "debian:12",
+      "kind": "deb",
+      "asset": "wedge_${VERSION}-1_amd64.deb",
+      "prerequisites": "command -v curl >/dev/null || (sudo apt-get update && sudo apt-get install -y curl)",
+      "install": "sudo apt-get install -y ./wedge_${VERSION}-1_amd64.deb",
+      "start": "sudo systemctl enable --now wedge",
+      "reload": "sudo systemctl reload wedge",
+      "remove": "sudo apt-get remove wedge"
+    },
+    {
+      "id": "ubuntu-24.04",
+      "title": "Ubuntu 24.04 LTS",
+      "image": "ubuntu:24.04",
+      "kind": "deb",
+      "asset": "wedge_${VERSION}-1_amd64.deb",
+      "prerequisites": "command -v curl >/dev/null || (sudo apt-get update && sudo apt-get install -y curl)",
+      "install": "sudo apt-get install -y ./wedge_${VERSION}-1_amd64.deb",
+      "start": "sudo systemctl enable --now wedge",
+      "reload": "sudo systemctl reload wedge",
+      "remove": "sudo apt-get remove wedge"
+    },
+    {
+      "id": "kali",
+      "title": "Kali Linux (rolling)",
+      "image": "kalilinux/kali-rolling",
+      "kind": "deb",
+      "asset": "wedge_${VERSION}-1_amd64.deb",
+      "prerequisites": "command -v curl >/dev/null || (sudo apt-get update && sudo apt-get install -y curl)",
+      "install": "sudo apt-get install -y ./wedge_${VERSION}-1_amd64.deb",
+      "start": "sudo systemctl enable --now wedge",
+      "reload": "sudo systemctl reload wedge",
+      "remove": "sudo apt-get remove wedge"
+    },
+    {
+      "id": "fedora-40",
+      "title": "Fedora 40",
+      "image": "fedora:40",
+      "kind": "rpm",
+      "asset": "wedge-${VERSION}-1.x86_64.rpm",
+      "prerequisites": "command -v curl >/dev/null || sudo dnf install -y curl",
+      "install": "sudo dnf install -y ./wedge-${VERSION}-1.x86_64.rpm",
+      "start": "sudo systemctl enable --now wedge",
+      "reload": "sudo systemctl reload wedge",
+      "remove": "sudo dnf remove wedge"
+    },
+    {
+      "id": "rhel-9",
+      "title": "RHEL 9 and compatible (Rocky Linux, AlmaLinux)",
+      "image": "rockylinux:9",
+      "kind": "rpm",
+      "asset": "wedge-${VERSION}-1.x86_64.rpm",
+      "prerequisites": "command -v curl >/dev/null || sudo dnf install -y curl",
+      "install": "sudo dnf install -y ./wedge-${VERSION}-1.x86_64.rpm",
+      "start": "sudo systemctl enable --now wedge",
+      "reload": "sudo systemctl reload wedge",
+      "remove": "sudo dnf remove wedge"
+    },
+    {
+      "id": "alpine-3.20",
+      "title": "Alpine Linux 3.20",
+      "image": "alpine:3.20",
+      "kind": "tarball",
+      "asset": "wedge-${VERSION}-x86_64-unknown-linux-musl.tar.gz",
+      "prerequisites": "command -v curl >/dev/null || sudo apk add curl\ncommand -v openrc >/dev/null || sudo apk add openrc",
+      "install": "tar -xzf wedge-${VERSION}-x86_64-unknown-linux-musl.tar.gz\nsudo install -m 0755 x86_64-unknown-linux-musl/wedge /usr/local/bin/wedge\nsudo addgroup -S wedge && sudo adduser -S -D -H -G wedge -s /sbin/nologin wedge\nsudo mkdir -p /etc/wedge/conf.d /srv/www\nsudo cp x86_64-unknown-linux-musl/examples/www/default/index.html /srv/www/\nprintf '[server]\\nlisten = [\"127.0.0.1:8080\"]\\ndefault_vhost = \"default\"\\n\\n[[vhost]]\\nname = \"default\"\\nroot = \"/srv/www\"\\n' | sudo tee /etc/wedge/wedge.toml >/dev/null\nsudo chown -R root:wedge /etc/wedge && sudo chmod 0750 /etc/wedge && sudo chmod 0640 /etc/wedge/wedge.toml\nsudo install -m 0755 x86_64-unknown-linux-musl/openrc/wedge /etc/init.d/wedge",
+      "start": "sudo rc-update add wedge default && sudo rc-service wedge start",
+      "reload": "sudo rc-service wedge reload",
+      "remove": "sudo rc-service wedge stop; sudo rc-update del wedge default\nsudo rm /etc/init.d/wedge /usr/local/bin/wedge"
+    },
+    {
+      "id": "windows",
+      "title": "Windows 10/11 and Windows Server (x86_64)",
+      "kind": "windows",
+      "tested": "untested",
+      "asset": "wedge-${VERSION}-x86_64-pc-windows-msvc.zip"
+    },
+    {
+      "id": "macos",
+      "title": "macOS (Apple silicon and Intel)",
+      "kind": "macos",
+      "tested": "untested",
+      "asset": "wedge-${VERSION}-aarch64-apple-darwin.tar.gz"
+    }
+  ]
+}

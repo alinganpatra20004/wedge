@@ -1,0 +1,38 @@
+{
+  "alpine-3.20": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": ""
+  },
+  "debian-12": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": "debian@sha256:d74df7598108a173a621eda4d58a2adbf850b2d9a9d81bc2cca1a6c21174a880"
+  },
+  "fedora-40": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": "fedora@sha256:3c86d25fef9d2001712bc3d9b091fc40cf04be4767e48f1aa3b785bf58d300ed"
+  },
+  "kali": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": "kalilinux/kali-rolling@sha256:ea20024e16833dab1a5337f5998602f3b81f8a38f3b0995dda272c83a1b0c1b9"
+  },
+  "rhel-9": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": "rockylinux@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6"
+  },
+  "ubuntu-24.04": {
+    "result": "passed",
+    "date": "2026-10-31",
+    "version": "0.1.0",
+    "image": "ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852"
+  }
+}
