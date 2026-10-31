@@ -6,9 +6,16 @@
 fn main() {
     let icon = "../../packaging/branding/generated/wedge.ico";
     println!("cargo:rerun-if-changed={icon}");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
+    // `cfg(windows)` here is the build host: the resource compiler only
+    // exists there, and so does the winresource dependency.
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed(icon);
     }
+}
+
+#[cfg(windows)]
+fn embed(icon: &str) {
     let mut resource = winresource::WindowsResource::new();
     resource
         .set_icon(icon)

@@ -32,5 +32,8 @@ tempfile = "3.27.0"
 [target."cfg(windows)".dependencies]
 windows-service = "0.8.1"
 
-[build-dependencies]
-winresource = "0.1.34"
+# Windows icon and version info (build.rs). Pinned to 0.1.23, the last release
+# on toml 0.8: later ones pull serde_spanned 1.x, which needs Rust 1.85 and
+# breaks the 1.80 MSRV (Cargo parses every locked manifest).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "=0.1.23"
