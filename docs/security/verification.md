@@ -92,3 +92,32 @@ Not yet tested (needs the user):
 Known limitations: metrics counters restart from zero after a reload; the
 409 response for a concurrent reload is implemented but not separately
 tested; capture queue overflow is implemented but not separately tested.
+
+## Container smoke test of the v0.1.0 release candidate (2026-10-31)
+
+Subject: `wedge-0.1.0-oci-amd64.tar` from release dry run 41193421743
+(commit b54a18b; later commits change only docs and the MSI script), SHA-256
+checked against its `SHA256SUMS`. Docker Desktop 26.1.1, Linux containers.
+The server ran as user 65532 with `--read-only --cap-drop ALL
+--security-opt no-new-privileges`, config and site mounted read-only:
+default and `blog.localhost` vhosts, a TLS vhost (self-signed P-256 test
+certificate), an `api.localhost` proxy route to a second wedge container,
+and the admin listener with a reload token from an environment variable.
+
+| Check | Tool | Result |
+|---|---|---|
+| Functional, 45 checks | curl 8.10.1 (`curlimages/curl`) | 45/45 pass: h1 and h2c, vhosts, unknown and bad Host, 404 for missing, hidden and directory paths, traversal (`../`, `%2e%2e`, `%2f`, `%5c`, NUL) 400, range 206/416, ETag 304, gzip with `Vary`, 405/204/413/400 (TE+CL), URI 414, header 431, security headers, no HSTS on plain HTTP, TLS with h2 via ALPN and HSTS, TLS 1.1 and unknown SNI refused, proxied GET, route boundary 404, proxy body 413, proxied traversal 400, metrics, admin Host 421, reload 401/405/200, serving after reload |
+| Upstream health | wedge health checks | upstream marked down while its health file was missing, back up within one interval once it existed |
+| Image scan | Trivy 0.56.2 (vuln, secret, misconfig) | no findings; but 0 packages detected: the binary is not built with `cargo auditable`, so dependency coverage comes from cargo-audit/cargo-deny on `Cargo.lock` (Phase 7.1 adds auditable builds) |
+| TLS | testssl.sh 3.2 | TLS 1.2 and 1.3 only; no protocol or cipher vulnerabilities; grade T and the chain, revocation and CAA findings come from the self-signed test certificate; "no KEMs offered" (LOW) is the known post-quantum residual |
+| Web scan | OWASP ZAP 2.15.0 baseline | 0 failures, 63 passes, 4 warnings: CSP not set (Medium) and Permissions-Policy not set (Low), both site-specific and settable per vhost in `[vhost.headers]`; cacheable content (informational, expected for static files); ZAP version notice |
+
+No high or critical finding in the server. Notes for Phase 7: consider an
+opt-in default CSP / Permissions-Policy, and rerun the scans with auditable
+binaries and a current ZAP.
+
+Harness notes: the TLS key had to be owned by the container user (0600,
+uid 65532); while it was not, wedge refused to start with a clear error.
+POST with a body on a static route is 413 by design (T2.7, static routes
+take no body); a 16 KiB URI exceeds the 16 KiB header buffer and gets 431
+before the 8 KiB URI limit (414) applies.
