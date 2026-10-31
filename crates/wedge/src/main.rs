@@ -30,6 +30,13 @@ enum Command {
         #[arg(short, long, default_value = "wedge.toml")]
         config: PathBuf,
     },
+    /// Ask a running server to reload its configuration (through the admin
+    /// listener; needs `[server.admin]` with a `token`).
+    Reload {
+        /// Path to the master configuration file.
+        #[arg(short, long, default_value = "wedge.toml")]
+        config: PathBuf,
+    },
     /// Print the configuration JSON Schema.
     Schema,
 }
@@ -53,6 +60,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Reload { config } => reload(&config),
         Command::Schema => {
             let schema = wedge_config::json_schema();
             match serde_json::to_string_pretty(&schema) {
@@ -90,7 +98,8 @@ fn run(config_path: &std::path::Path) -> ExitCode {
         }
     };
     runtime.block_on(async {
-        let server = match wedge_core::Server::bind(&config).await {
+        let path = config_path.to_path_buf();
+        let server = match wedge_core::Server::bind_reloadable(&config, Some(path)).await {
             Ok(server) => server,
             Err(e) => {
                 tracing::error!("{e}");
@@ -106,9 +115,101 @@ fn run(config_path: &std::path::Path) -> ExitCode {
         if let Some(addr) = server.local_admin_addr() {
             tracing::info!(%addr, "admin listener (metrics)");
         }
+        #[cfg(unix)]
+        tokio::spawn(reload_on_sighup(server.reloader()));
         server.run(shutdown_signal()).await;
         ExitCode::SUCCESS
     })
+}
+
+/// Reloads on every SIGHUP. Errors are logged; the old config keeps serving.
+#[cfg(unix)]
+async fn reload_on_sighup(reloader: wedge_core::Reloader) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let Ok(mut hangup) = signal(SignalKind::hangup()) else {
+        tracing::warn!("cannot listen for SIGHUP; reload with `wedge reload` instead");
+        return;
+    };
+    while hangup.recv().await.is_some() {
+        if let Err(e) = reloader.reload().await {
+            tracing::error!(error = %e, "reload failed; still serving the previous configuration");
+        }
+    }
+}
+
+/// Sends `POST /-/reload` to the admin listener named in the config, with
+/// its token, and prints the server's answer.
+fn reload(config_path: &std::path::Path) -> ExitCode {
+    use std::io::{Read, Write};
+
+    let config = match wedge_config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(admin) = config.server.admin else {
+        eprintln!("no [server.admin] section in {}", config_path.display());
+        return ExitCode::FAILURE;
+    };
+    let Some(reference) = admin.token else {
+        eprintln!("[server.admin] has no token, so reload over HTTP is off");
+        return ExitCode::FAILURE;
+    };
+    let token = match reference.resolve() {
+        Ok(token) => token,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Ok(token) = std::str::from_utf8(token.expose()) else {
+        eprintln!("admin token {reference} is not valid UTF-8");
+        return ExitCode::FAILURE;
+    };
+    // A wildcard bind address is reached through loopback.
+    let mut addr = admin.listen;
+    if addr.ip().is_unspecified() {
+        addr.set_ip(if addr.is_ipv4() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            std::net::Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    let timeout = std::time::Duration::from_secs(30);
+    let result = std::net::TcpStream::connect_timeout(&addr, timeout).and_then(|mut stream| {
+        stream.set_read_timeout(Some(timeout))?;
+        let request = format!(
+            "POST /-/reload HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes())?;
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply)?;
+        Ok(reply)
+    });
+    match result {
+        Ok(reply) => {
+            let ok = reply.starts_with("HTTP/1.1 200");
+            let body = reply
+                .split_once("\r\n\r\n")
+                .map_or("", |(_, b)| b)
+                .trim_end();
+            if ok {
+                println!("{body}");
+                ExitCode::SUCCESS
+            } else {
+                let status = reply.lines().next().unwrap_or("no response");
+                eprintln!("{status}\n{body}");
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("cannot reach the admin listener at {addr}: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Logs to stderr. Filter with RUST_LOG (default info); JSON output with

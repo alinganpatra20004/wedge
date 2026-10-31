@@ -13,8 +13,9 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::{Arc, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 use hyper::body::Incoming;
 use hyper::service::service_fn;
@@ -25,7 +26,7 @@ use hyper_util::server::graceful::{GracefulShutdown, Watcher};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
-use wedge_config::{Config, IpNet, Limits};
+use wedge_config::{AdminConfig, Config, IpNet, Limits, Secret};
 
 use crate::admin;
 use crate::files::{self, Root};
@@ -56,14 +57,46 @@ pub enum ServerError {
     },
     #[error(transparent)]
     Tls(#[from] TlsError),
+    #[error("admin token: {0}")]
+    AdminToken(#[source] wedge_config::SecretError),
     #[error("invalid response header configuration: {0}")]
     Headers(String),
+}
+
+/// Why a reload was not applied. The server keeps its previous state.
+#[derive(Debug, thiserror::Error)]
+pub enum ReloadError {
+    #[error("the server was not started from a configuration file")]
+    NoConfigFile,
+    #[error("another reload is in progress")]
+    Busy,
+    #[error("reloaded less than a second ago; try again")]
+    TooSoon,
+    #[error(transparent)]
+    Config(#[from] wedge_config::ConfigError),
+    #[error("{0} cannot change on reload; restart wedge to apply it")]
+    RestartOnly(&'static str),
+    #[error(transparent)]
+    Server(#[from] ServerError),
 }
 
 /// A server with its listeners bound, ready to run.
 pub struct Server {
     listeners: Vec<(TcpListener, Kind)>,
-    state: Arc<State>,
+    shared: Arc<Shared>,
+}
+
+/// Triggers a configuration reload on a running server (`SIGHUP`, or the
+/// admin endpoint). Cheap to clone.
+#[derive(Clone)]
+pub struct Reloader(Arc<Shared>);
+
+impl Reloader {
+    /// Re-reads the configuration file and swaps in the new state, or keeps
+    /// the old one and returns why not (T5.4).
+    pub async fn reload(&self) -> Result<(), ReloadError> {
+        self.0.reload().await
+    }
 }
 
 /// What a listener serves.
@@ -75,8 +108,59 @@ enum Kind {
     Admin,
 }
 
-/// Shared, read-only state for all connections.
+/// Settings fixed for the life of the process, plus the swappable state.
+struct Shared {
+    current: RwLock<Arc<State>>,
+    /// The settings that a reload may not change (T5.6).
+    fixed: Fixed,
+    config_path: Option<PathBuf>,
+    /// Port of the first TLS listener as bound, for HTTPS redirects.
+    https_port: Option<u16>,
+    admin_allow: Vec<IpNet>,
+    /// Bearer token for `POST /-/reload`, resolved once at startup.
+    admin_token: Option<Secret>,
+    /// Time of the last reload; the lock also serializes reloads (T5.5).
+    last_reload: tokio::sync::Mutex<Option<Instant>>,
+}
+
+#[derive(PartialEq)]
+struct Fixed {
+    listen: Vec<SocketAddr>,
+    listen_tls: Vec<SocketAddr>,
+    admin: Option<AdminConfig>,
+    limits: Limits,
+}
+
+impl Fixed {
+    fn of(config: &Config) -> Self {
+        Self {
+            listen: config.server.listen.clone(),
+            listen_tls: config.server.listen_tls.clone(),
+            admin: config.server.admin.clone(),
+            limits: config.server.limits.clone(),
+        }
+    }
+
+    /// The first restart-only setting that differs, if any.
+    fn changed(&self, other: &Self) -> Option<&'static str> {
+        if self.listen != other.listen {
+            Some("server.listen")
+        } else if self.listen_tls != other.listen_tls {
+            Some("server.listen_tls")
+        } else if self.admin != other.admin {
+            Some("[server.admin]")
+        } else if self.limits != other.limits {
+            Some("[server.limits]")
+        } else {
+            None
+        }
+    }
+}
+
+/// Everything built from one configuration. Requests use the state that is
+/// current when they arrive; a reload swaps in a new one (T5.4).
 struct State {
+    /// The same as `Fixed::limits`: limits are restart-only.
     limits: Limits,
     /// Indexed like the configured vhosts; `None` for proxy-only vhosts.
     roots: Vec<Option<Root>>,
@@ -85,38 +169,13 @@ struct State {
     headers: Policy,
     proxy: Proxy,
     metrics: Metrics,
-    /// Clients allowed on the admin listener.
-    admin_allow: Vec<IpNet>,
+    /// Dropping or signalling this stops this state's health checks.
+    health_stop: watch::Sender<bool>,
 }
 
-/// Per-connection facts passed to every request on it.
-#[derive(Clone, Copy)]
-struct Conn {
-    peer: SocketAddr,
-    /// For TLS connections, the vhost whose certificate was served.
-    tls_vhost: Option<usize>,
-}
-
-impl Server {
-    /// Loads certificates, then binds every configured listen address.
-    pub async fn bind(config: &Config) -> Result<Self, ServerError> {
-        if config.server.listen.is_empty() && config.server.listen_tls.is_empty() {
-            return Err(ServerError::NoListeners);
-        }
+impl State {
+    async fn build(config: &Config, https_port: Option<u16>) -> Result<Self, ServerError> {
         let tls = Tls::from_config(config)?;
-        let mut listeners = Vec::new();
-        let plain = config.server.listen.iter().map(|a| (*a, Kind::Plain));
-        let secure = config.server.listen_tls.iter().map(|a| (*a, Kind::Tls));
-        let admin = config.server.admin.iter().map(|a| (a.listen, Kind::Admin));
-        for (addr, kind) in plain.chain(secure).chain(admin) {
-            let listener = TcpListener::bind(addr)
-                .await
-                .map_err(|source| ServerError::Bind { addr, source })?;
-            if kind == Kind::Admin && !addr.ip().is_loopback() {
-                tracing::warn!(%addr, "admin listener is not on a loopback address");
-            }
-            listeners.push((listener, kind));
-        }
         let mut roots = Vec::new();
         for vhost in &config.vhost {
             let Some(root) = &vhost.root else {
@@ -135,32 +194,104 @@ impl Server {
             }));
         }
         let mut headers = Policy::new(config).map_err(ServerError::Headers)?;
-        let first_tls_port = listeners
+        if let Some(port) = https_port {
+            headers.set_https_port(port);
+        }
+        let proxy = Proxy::new(config);
+        let (health_stop, stop_rx) = watch::channel(false);
+        proxy.spawn_health_checks(&stop_rx);
+        Ok(Self {
+            limits: config.server.limits.clone(),
+            roots,
+            router: Router::new(config),
+            tls,
+            headers,
+            proxy,
+            metrics: Metrics::new(config),
+            health_stop,
+        })
+    }
+}
+
+/// Facts about one client connection.
+#[derive(Clone)]
+struct ConnInfo {
+    peer: SocketAddr,
+    /// `Some` for TLS connections, holding the SNI name the client sent.
+    tls_sni: Option<Option<Arc<str>>>,
+}
+
+/// Per-request view of the connection, resolved against the current state.
+#[derive(Clone, Copy)]
+struct Conn {
+    peer: SocketAddr,
+    /// For TLS connections, the vhost whose certificate the SNI selects in
+    /// the current state.
+    tls_vhost: Option<usize>,
+}
+
+impl Server {
+    /// Loads certificates, then binds every configured listen address.
+    pub async fn bind(config: &Config) -> Result<Self, ServerError> {
+        Self::bind_reloadable(config, None).await
+    }
+
+    /// Like [`Server::bind`]; `config_path` is the master file that reloads
+    /// read again.
+    pub async fn bind_reloadable(
+        config: &Config,
+        config_path: Option<PathBuf>,
+    ) -> Result<Self, ServerError> {
+        if config.server.listen.is_empty() && config.server.listen_tls.is_empty() {
+            return Err(ServerError::NoListeners);
+        }
+        // Certificates and roots are checked before any port is bound.
+        drop(State::build(config, None).await?);
+        let mut listeners = Vec::new();
+        let plain = config.server.listen.iter().map(|a| (*a, Kind::Plain));
+        let secure = config.server.listen_tls.iter().map(|a| (*a, Kind::Tls));
+        let admin = config.server.admin.iter().map(|a| (a.listen, Kind::Admin));
+        for (addr, kind) in plain.chain(secure).chain(admin) {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|source| ServerError::Bind { addr, source })?;
+            if kind == Kind::Admin && !addr.ip().is_loopback() {
+                tracing::warn!(%addr, "admin listener is not on a loopback address");
+            }
+            listeners.push((listener, kind));
+        }
+        let https_port = listeners
             .iter()
             .find(|(_, kind)| *kind == Kind::Tls)
             .and_then(|(l, _)| l.local_addr().ok())
             .map(|a| a.port());
-        if let Some(port) = first_tls_port {
-            headers.set_https_port(port);
-        }
+        let admin_token = match config.server.admin.as_ref().and_then(|a| a.token.as_ref()) {
+            Some(reference) => Some(reference.resolve().map_err(ServerError::AdminToken)?),
+            None => None,
+        };
+        let state = State::build(config, https_port).await?;
         Ok(Self {
             listeners,
-            state: Arc::new(State {
-                limits: config.server.limits.clone(),
-                roots,
-                router: Router::new(config),
-                tls,
-                headers,
-                proxy: Proxy::new(config),
-                metrics: Metrics::new(config),
+            shared: Arc::new(Shared {
+                current: RwLock::new(Arc::new(state)),
+                fixed: Fixed::of(config),
+                config_path,
+                https_port,
                 admin_allow: config
                     .server
                     .admin
                     .as_ref()
                     .map(|a| a.allow.clone())
                     .unwrap_or_default(),
+                admin_token,
+                last_reload: tokio::sync::Mutex::new(None),
             }),
         })
+    }
+
+    /// A handle that reloads this server's configuration while it runs.
+    pub fn reloader(&self) -> Reloader {
+        Reloader(Arc::clone(&self.shared))
     }
 
     /// The bound plain-HTTP addresses (useful when a port of 0 was requested).
@@ -189,19 +320,18 @@ impl Server {
     /// Serves until `shutdown` completes, then stops accepting and waits up
     /// to the configured grace period for open connections to finish.
     pub async fn run(self, shutdown: impl Future<Output = ()>) {
-        let limits = &self.state.limits;
+        let limits = &self.shared.fixed.limits;
         let permits = Arc::new(Semaphore::new(limits.max_connections));
         let graceful = Arc::new(GracefulShutdown::new());
         let builder = Arc::new(protocol_builder(limits));
         let (stop_tx, stop_rx) = watch::channel(false);
-        self.state.proxy.spawn_health_checks(&stop_rx);
 
         let mut accept_tasks = Vec::new();
         for (listener, kind) in self.listeners {
             accept_tasks.push(tokio::spawn(accept_loop(
                 listener,
                 kind,
-                Arc::clone(&self.state),
+                Arc::clone(&self.shared),
                 Arc::clone(&builder),
                 Arc::clone(&permits),
                 Arc::clone(&graceful),
@@ -212,6 +342,7 @@ impl Server {
         shutdown.await;
         tracing::info!("shutdown requested; no longer accepting connections");
         let _ = stop_tx.send(true);
+        let _ = self.shared.load().health_stop.send(true);
         for task in accept_tasks {
             let _ = task.await;
         }
@@ -224,6 +355,38 @@ impl Server {
             Ok(()) => tracing::info!("all connections closed"),
             Err(_) => tracing::warn!("grace period elapsed; dropping open connections"),
         }
+    }
+}
+
+impl Shared {
+    /// The current state. A poisoned lock still holds a complete state,
+    /// because the swap is a single assignment.
+    fn load(&self) -> Arc<State> {
+        let guard = self.current.read().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(&guard)
+    }
+
+    async fn reload(&self) -> Result<(), ReloadError> {
+        let path = self.config_path.as_ref().ok_or(ReloadError::NoConfigFile)?;
+        // T5.5: one reload at a time, at most one per second.
+        let mut last = self.last_reload.try_lock().map_err(|_| ReloadError::Busy)?;
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return Err(ReloadError::TooSoon);
+        }
+        *last = Some(Instant::now());
+        let config = wedge_config::load(path)?;
+        if let Some(setting) = self.fixed.changed(&Fixed::of(&config)) {
+            return Err(ReloadError::RestartOnly(setting));
+        }
+        // Built completely before the swap; any error leaves the old state.
+        let state = Arc::new(State::build(&config, self.https_port).await?);
+        let old = {
+            let mut guard = self.current.write().unwrap_or_else(PoisonError::into_inner);
+            std::mem::replace(&mut *guard, state)
+        };
+        let _ = old.health_stop.send(true);
+        tracing::info!(config = %path.display(), "configuration reloaded");
+        Ok(())
     }
 }
 
@@ -251,12 +414,13 @@ fn protocol_builder(limits: &Limits) -> Builder<TokioExecutor> {
 async fn accept_loop(
     listener: TcpListener,
     kind: Kind,
-    state: Arc<State>,
+    shared: Arc<Shared>,
     builder: Arc<Builder<TokioExecutor>>,
     permits: Arc<Semaphore>,
     graceful: Arc<GracefulShutdown>,
     mut stop: watch::Receiver<bool>,
 ) {
+    let limits = &shared.fixed.limits;
     loop {
         // Wait for a free connection slot before accepting, so excess clients
         // queue in the kernel backlog instead of consuming memory here.
@@ -280,34 +444,37 @@ async fn accept_loop(
             },
             _ = stop.changed() => return,
         };
-        if kind == Kind::Admin && !state.admin_allow.iter().any(|n| n.contains(peer.ip())) {
+        if kind == Kind::Admin && !shared.admin_allow.iter().any(|n| n.contains(peer.ip())) {
             // T5.1: refused before any HTTP is read.
             tracing::warn!(%peer, "admin connection from a disallowed address");
             continue;
         }
         let _ = stream.set_nodelay(true);
-        let idle = Duration::from_secs(state.limits.idle_timeout_secs);
-        let stream = IdleTimeout::new(stream, idle);
-        let state = Arc::clone(&state);
+        let stream = IdleTimeout::new(stream, Duration::from_secs(limits.idle_timeout_secs));
+        let shared = Arc::clone(&shared);
         let builder = Arc::clone(&builder);
+        let budget = Duration::from_secs(limits.header_timeout_secs);
         // Taken now, so shutdown also waits for connections still handshaking.
         let watcher = graceful.watcher();
         tokio::spawn(async move {
-            let plain = Conn {
+            let state = shared.load();
+            let plain = ConnInfo {
                 peer,
-                tls_vhost: None,
+                tls_sni: None,
             };
             match (&state.tls, kind) {
-                (_, Kind::Admin) => serve(&builder, stream, &state, plain, true, watcher).await,
+                (_, Kind::Admin) => serve(&builder, stream, &shared, plain, true, watcher).await,
                 (Some(tls), Kind::Tls) => {
                     let _open = state.metrics.connection(true);
                     // T3.5: the handshake shares the request-head time budget.
-                    let budget = Duration::from_secs(state.limits.header_timeout_secs);
                     match tokio::time::timeout(budget, tls.acceptor.accept(stream)).await {
                         Ok(Ok(stream)) => {
-                            let tls_vhost = tls.vhost_for(stream.get_ref().1.server_name());
-                            let conn = Conn { peer, tls_vhost };
-                            serve(&builder, stream, &state, conn, false, watcher).await;
+                            let sni = stream.get_ref().1.server_name().map(Arc::from);
+                            let conn = ConnInfo {
+                                peer,
+                                tls_sni: Some(sni),
+                            };
+                            serve(&builder, stream, &shared, conn, false, watcher).await;
                         }
                         Ok(Err(e)) => {
                             state.metrics.tls_handshake_failed();
@@ -321,7 +488,7 @@ async fn accept_loop(
                 }
                 _ => {
                     let _open = state.metrics.connection(false);
-                    serve(&builder, stream, &state, plain, false, watcher).await;
+                    serve(&builder, stream, &shared, plain, false, watcher).await;
                 }
             }
             drop(permit);
@@ -333,21 +500,23 @@ async fn accept_loop(
 async fn serve<I>(
     builder: &Builder<TokioExecutor>,
     io: I,
-    state: &Arc<State>,
-    conn: Conn,
+    shared: &Arc<Shared>,
+    conn: ConnInfo,
     admin: bool,
     watcher: Watcher,
 ) where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let state = Arc::clone(state);
+    let peer = conn.peer;
+    let shared = Arc::clone(shared);
     let service = service_fn(move |req| {
-        let state = Arc::clone(&state);
+        let shared = Arc::clone(&shared);
+        let conn = conn.clone();
         async move {
             let response = if admin {
-                admin::respond(&state.metrics, &state.proxy, &req)
+                admin_request(&shared, req).await
             } else {
-                handle(&state, req, conn).await
+                handle(&shared.load(), req, &conn).await
             };
             Ok::<_, Infallible>(response)
         }
@@ -356,16 +525,65 @@ async fn serve<I>(
         .serve_connection(TokioIo::new(io), service)
         .into_owned();
     if let Err(e) = watcher.watch(connection).await {
-        tracing::debug!(peer = %conn.peer, error = %e, "connection ended with error");
+        tracing::debug!(%peer, error = %e, "connection ended with error");
+    }
+}
+
+/// `POST /-/reload` with the admin token; everything else goes to the
+/// metrics handler.
+async fn admin_request(shared: &Shared, req: Request<Incoming>) -> Response<Body> {
+    if req.uri().path() != "/-/reload" {
+        let state = shared.load();
+        return admin::respond(&state.metrics, &state.proxy, &req);
+    }
+    if let Some(response) = admin::reload_rejection(&req, shared.admin_token.as_ref()) {
+        return response;
+    }
+    match shared.reload().await {
+        Ok(()) => {
+            let mut response = Response::new(response::full("reloaded\n"));
+            response.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            response
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "reload refused");
+            let code = match e {
+                ReloadError::Busy => StatusCode::CONFLICT,
+                ReloadError::TooSoon => StatusCode::TOO_MANY_REQUESTS,
+                _ => StatusCode::UNPROCESSABLE_ENTITY,
+            };
+            // Only an authenticated admin sees this; config errors never
+            // contain secret values.
+            let mut response = Response::new(response::full(format!("reload failed: {e}\n")));
+            *response.status_mut() = code;
+            response
+        }
     }
 }
 
 /// Handles one request and writes its access log line.
-async fn handle(state: &State, req: Request<Incoming>, conn: Conn) -> Response<Body> {
+async fn handle(state: &State, req: Request<Incoming>, info: &ConnInfo) -> Response<Body> {
     let started = std::time::Instant::now();
+    let tls_vhost = info.tls_sni.as_ref().and_then(|sni| {
+        let tls = state.tls.as_ref()?;
+        tls.vhost_for(sni.as_deref())
+    });
+    let conn = Conn {
+        peer: info.peer,
+        tls_vhost,
+    };
     let entry = AccessEntry::new(&req, conn);
     let method = req.method().clone();
-    let (mut response, vhost) = respond(state, req, conn).await;
+    let (mut response, vhost) = if info.tls_sni.is_some() && tls_vhost.is_none() {
+        // After a reload removed the certificate this connection was made
+        // with: the client must reconnect (T3.4).
+        (response::status(StatusCode::MISDIRECTED_REQUEST), None)
+    } else {
+        respond(state, req, conn).await
+    };
     state.headers.apply(&mut response, vhost, conn.tls_vhost);
     let elapsed = started.elapsed();
     state

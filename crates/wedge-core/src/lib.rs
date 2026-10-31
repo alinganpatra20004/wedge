@@ -16,7 +16,7 @@ mod tls;
 mod vhost;
 
 pub use response::Body;
-pub use server::{Server, ServerError};
+pub use server::{ReloadError, Reloader, Server, ServerError};
 pub use tls::TlsError;
 
 /// Entry points for the fuzz targets in `fuzz/`. Not a stable API.

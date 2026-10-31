@@ -125,3 +125,147 @@ async fn admin_address_cannot_be_a_public_listener() {
     let err = wedge_config::from_str(toml).unwrap_err().to_string();
     assert!(err.contains("duplicate listen address"), "{err}");
 }
+
+/// A server started from a config file in a temp dir, with an admin token,
+/// so it can be reloaded.
+struct Reloadable {
+    public: SocketAddr,
+    admin: SocketAddr,
+    dir: tempfile::TempDir,
+    reloader: wedge_core::Reloader,
+    _stop: tokio::sync::oneshot::Sender<()>,
+}
+
+fn write_config(dir: &std::path::Path, listen: &str, extra_vhost: &str) {
+    let text = format!(
+        "[server]\nlisten = [{listen:?}]\ndefault_vhost = \"site\"\n\
+         [server.admin]\nlisten = \"127.0.0.1:0\"\ntoken = \"file:token.txt\"\n\
+         [[vhost]]\nname = \"site\"\nroot = \"www\"\n{extra_vhost}"
+    );
+    std::fs::write(dir.join("wedge.toml"), text).unwrap();
+}
+
+async fn start_reloadable() -> Reloadable {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("www")).unwrap();
+    std::fs::write(dir.path().join("www/index.html"), "home").unwrap();
+    std::fs::write(dir.path().join("token.txt"), "s3cret-token\n").unwrap();
+    write_config(dir.path(), "127.0.0.1:0", "");
+    let path = dir.path().join("wedge.toml");
+    let config = wedge_config::load(&path).unwrap();
+    let server = Server::bind_reloadable(&config, Some(path)).await.unwrap();
+    let public = server.local_addrs()[0];
+    let admin = server.local_admin_addr().unwrap();
+    let reloader = server.reloader();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = rx.await;
+    }));
+    Reloadable {
+        public,
+        admin,
+        dir,
+        reloader,
+        _stop: tx,
+    }
+}
+
+fn reload_request(token: Option<&str>) -> String {
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
+    format!(
+        "POST /-/reload HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Length: 0\r\n\
+         Connection: close\r\n\r\n"
+    )
+}
+
+fn header<'a>(reply: &'a str, name: &str) -> Option<&'a str> {
+    let head = reply.split("\r\n\r\n").next()?;
+    head.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+#[tokio::test]
+async fn reload_needs_the_token() {
+    let s = start_reloadable().await;
+    for token in [
+        None,
+        Some("wrong"),
+        Some("s3cret-token-but-longer"),
+        Some("s3cret-toke"),
+    ] {
+        let reply = send(s.admin, &reload_request(token)).await;
+        assert_eq!(status(&reply), 401, "{token:?}: {reply}");
+        assert_eq!(header(&reply, "www-authenticate"), Some("Bearer"));
+    }
+    let get = send(
+        s.admin,
+        "GET /-/reload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert_eq!(status(&get), 405, "{get}");
+    let rebind = reload_request(Some("s3cret-token")).replace("localhost", "evil.example");
+    assert_eq!(status(&send(s.admin, &rebind).await), 421);
+    // Without a configured token, the endpoint does not exist.
+    let plain = start("").await;
+    assert_eq!(
+        status(&send(plain.admin, &reload_request(Some("x"))).await),
+        404
+    );
+}
+
+#[tokio::test]
+async fn reload_applies_good_config_and_keeps_old_on_errors() {
+    let s = start_reloadable().await;
+    let home = get("/", "x");
+    let page = || send(s.public, &home);
+    assert_eq!(header(&page().await, "x-version"), None);
+
+    // A good change is applied.
+    write_config(
+        s.dir.path(),
+        "127.0.0.1:0",
+        "[vhost.headers]\n\"X-Version\" = \"2\"\n",
+    );
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert_eq!(header(&page().await, "x-version"), Some("2"));
+
+    // A broken file is refused and the old state keeps serving (T5.4).
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    std::fs::write(s.dir.path().join("wedge.toml"), "[server\n").unwrap();
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 422, "{reply}");
+    assert!(reply.contains("cannot parse"), "{reply}");
+    let still = page().await;
+    assert_eq!(status(&still), 200);
+    assert_eq!(header(&still, "x-version"), Some("2"));
+
+    // A missing document root is refused too.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    write_config(s.dir.path(), "127.0.0.1:0", "");
+    std::fs::rename(s.dir.path().join("www"), s.dir.path().join("gone")).unwrap();
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 422, "{reply}");
+    std::fs::rename(s.dir.path().join("gone"), s.dir.path().join("www")).unwrap();
+    assert_eq!(header(&page().await, "x-version"), Some("2"));
+}
+
+#[tokio::test]
+async fn restart_only_settings_and_rate_limit() {
+    let s = start_reloadable().await;
+    // T5.6: listeners cannot move on reload.
+    write_config(s.dir.path(), "127.0.0.1:1", "");
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 422, "{reply}");
+    assert!(reply.contains("server.listen cannot change"), "{reply}");
+    // T5.5: a second attempt within a second is refused.
+    write_config(s.dir.path(), "127.0.0.1:0", "");
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 429, "{reply}");
+    // The SIGHUP path (Reloader) works once the second has passed.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    s.reloader.reload().await.unwrap();
+    assert_eq!(status(&send(s.public, &get("/", "x")).await), 200);
+}

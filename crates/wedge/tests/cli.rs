@@ -54,3 +54,74 @@ fn schema_prints_json() {
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(value.get("$defs").is_some());
 }
+
+/// A free TCP port on loopback (released before use, so another process
+/// could grab it in between; acceptable for a test).
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Kills the child process when dropped, even if the test panics.
+struct Running(std::process::Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn reload_command_reaches_a_running_server() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("www")).unwrap();
+    std::fs::write(dir.path().join("token"), "t0ken").unwrap();
+    let (public, admin) = (free_port(), free_port());
+    let config = dir.path().join("wedge.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[server]\nlisten = [\"127.0.0.1:{public}\"]\n\
+             [server.admin]\nlisten = \"127.0.0.1:{admin}\"\ntoken = \"file:token\"\n\
+             [[vhost]]\nname = \"v\"\nroot = \"www\"\n"
+        ),
+    )
+    .unwrap();
+    let _server = Running(
+        wedge()
+            .args(["run", "-c"])
+            .arg(&config)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let started = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", admin)).is_err() {
+        assert!(started.elapsed().as_secs() < 20, "server did not start");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let out = wedge()
+        .args(["reload", "-c"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("reloaded"), "{stdout}");
+
+    // A wrong token is reported as a failure.
+    std::fs::write(dir.path().join("token"), "wrong").unwrap();
+    let out = wedge()
+        .args(["reload", "-c"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("401"));
+}
