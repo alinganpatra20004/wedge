@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::SecretRef;
+use crate::{IpNet, SecretRef};
 
 /// Complete, merged server configuration.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
@@ -108,6 +108,10 @@ pub struct ServerConfig {
     /// TLS protocol settings shared by all TLS listeners.
     #[serde(default)]
     pub tls: TlsSettings,
+    /// Peers (such as a load balancer in front of wedge) whose
+    /// `X-Forwarded-For` wedge extends instead of replacing (T4.6).
+    #[serde(default)]
+    pub trusted_proxies: Vec<IpNet>,
     /// Name of the vhost that answers requests whose Host matches no vhost.
     /// When unset, such requests get 421 Misdirected Request.
     #[serde(default)]

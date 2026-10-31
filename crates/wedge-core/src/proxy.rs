@@ -21,7 +21,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use tokio::sync::watch;
-use wedge_config::Config;
+use wedge_config::{Config, IpNet};
 
 use crate::path;
 use crate::response::{self, Body};
@@ -45,6 +45,7 @@ pub(crate) struct Proxy {
     pools: Vec<Arc<Pool>>,
     /// Indexed like the configured vhosts; longest prefix first.
     routes: Vec<Vec<Route>>,
+    trusted_proxies: Vec<IpNet>,
 }
 
 /// A proxy route after validation.
@@ -141,7 +142,11 @@ impl Proxy {
                 routes
             })
             .collect();
-        Self { pools, routes }
+        Self {
+            pools,
+            routes,
+            trusted_proxies: config.server.trusted_proxies.clone(),
+        }
     }
 
     /// The route of `vhost` whose prefix matches `path`: equal, or followed by
@@ -170,11 +175,19 @@ impl Proxy {
         route: &Route,
         req: Request<Incoming>,
         peer: SocketAddr,
+        tls: bool,
     ) -> Response<Body> {
         let pool = &self.pools[route.pool];
         // T4.13: the upstream must resolve the same path wedge matched.
         if !path::proxy_path_ok(req.uri().path()) {
             return response::status(StatusCode::BAD_REQUEST);
+        }
+        // T4.4: both framings at once is the classic smuggling setup; refuse
+        // it (RFC 9112 §6.1 allows this) rather than guess which one the
+        // upstream would honour.
+        let chunked = req.headers().contains_key(hyper::header::TRANSFER_ENCODING);
+        if chunked && req.headers().contains_key(CONTENT_LENGTH) {
+            return close(response::status(StatusCode::BAD_REQUEST));
         }
         let declared = req
             .headers()
@@ -184,8 +197,7 @@ impl Proxy {
             return close(response::status(StatusCode::PAYLOAD_TOO_LARGE));
         }
         let (parts, body) = req.into_parts();
-        let has_body = declared.is_some_and(|n| n > 0)
-            || parts.headers.contains_key(hyper::header::TRANSFER_ENCODING);
+        let has_body = chunked || declared.is_some_and(|n| n > 0);
         // T4.11: only requests without a body and with a safe method are
         // retried, and only when no connection could be made.
         let retryable =
@@ -193,6 +205,8 @@ impl Proxy {
 
         let mut headers = parts.headers;
         strip_hop_by_hop(&mut headers);
+        let trusted = self.trusted_proxies.iter().any(|n| n.contains(peer.ip()));
+        set_forwarding_headers(&mut headers, peer, tls, trusted);
         if !headers.contains_key(HOST) {
             // HTTP/2 clients send :authority instead of Host.
             if let Some(value) = parts
@@ -205,16 +219,21 @@ impl Proxy {
         }
         let path_and_query = parts.uri.path_and_query().map_or("/", |pq| pq.as_str());
 
+        // Set when reading the client's body fails, so the error is reported
+        // as the client's (413 or 400), not as a bad upstream (502).
         let too_large = Arc::new(AtomicBool::new(false));
+        let client_failed = Arc::new(AtomicBool::new(false));
         let mut body = Some(if has_body {
-            let flag = Arc::clone(&too_large);
+            let (large, failed) = (Arc::clone(&too_large), Arc::clone(&client_failed));
             Limited::new(
                 body,
                 usize::try_from(route.max_body_bytes).unwrap_or(usize::MAX),
             )
             .map_err(move |e| {
                 if e.downcast_ref::<LengthLimitError>().is_some() {
-                    flag.store(true, Ordering::Relaxed);
+                    large.store(true, Ordering::Relaxed);
+                } else {
+                    failed.store(true, Ordering::Relaxed);
                 }
                 std::io::Error::other(e)
             })
@@ -248,7 +267,7 @@ impl Proxy {
             match sent.await {
                 Ok(Ok(upstream_res)) => {
                     pool.success(backend);
-                    return into_client_response(upstream_res);
+                    return into_client_response(upstream_res, pool.response_timeout);
                 }
                 Ok(Err(e)) if e.is_connect() => {
                     pool.failure(backend);
@@ -263,6 +282,9 @@ impl Proxy {
                 Ok(Err(e)) => {
                     if too_large.load(Ordering::Relaxed) {
                         return close(response::status(StatusCode::PAYLOAD_TOO_LARGE));
+                    }
+                    if client_failed.load(Ordering::Relaxed) {
+                        return close(response::status(StatusCode::BAD_REQUEST));
                     }
                     tracing::warn!(
                         upstream = %pool.name,
@@ -380,10 +402,104 @@ pub(crate) fn strip_hop_by_hop(headers: &mut HeaderMap) {
     }
 }
 
-fn into_client_response(upstream: Response<Incoming>) -> Response<Body> {
+/// Marks a response that came from an upstream, so default security headers
+/// are added only where the application set none (T4.12).
+#[derive(Clone, Copy)]
+pub(crate) struct Proxied;
+
+/// Replaces client-supplied identity headers with values wedge knows (T4.6).
+/// From a trusted proxy, an existing `X-Forwarded-For` chain and the
+/// `X-Forwarded-Proto`/`-Host` it set are kept, and the peer is appended.
+fn set_forwarding_headers(headers: &mut HeaderMap, peer: SocketAddr, tls: bool, trusted: bool) {
+    const XFF: &str = "x-forwarded-for";
+    const XFP: &str = "x-forwarded-proto";
+    const XFH: &str = "x-forwarded-host";
+    let chain: Vec<String> = if trusted {
+        headers
+            .get_all(XFF)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let kept_proto = trusted.then(|| headers.get(XFP).cloned()).flatten();
+    let kept_host = trusted.then(|| headers.get(XFH).cloned()).flatten();
+    for name in [XFF, XFP, XFH, "x-forwarded-port", "x-real-ip", "forwarded"] {
+        headers.remove(name);
+    }
+    let mut chain = chain;
+    chain.push(peer.ip().to_string());
+    if let Ok(value) = HeaderValue::from_str(&chain.join(", ")) {
+        headers.insert(XFF, value);
+    }
+    let proto = HeaderValue::from_static(if tls { "https" } else { "http" });
+    headers.insert(XFP, kept_proto.unwrap_or(proto));
+    if let Some(host) = kept_host.or_else(|| headers.get(HOST).cloned()) {
+        headers.insert(XFH, host);
+    }
+}
+
+fn into_client_response(upstream: Response<Incoming>, idle: Duration) -> Response<Body> {
     let (mut parts, body) = upstream.into_parts();
     strip_hop_by_hop(&mut parts.headers);
-    Response::from_parts(parts, body.map_err(std::io::Error::other).boxed())
+    parts.extensions.insert(Proxied);
+    Response::from_parts(parts, IdleBody::new(body, idle).boxed())
+}
+
+/// An upstream response body that fails once no data has arrived for the
+/// idle timeout, so a stalled upstream cannot hold a client forever (T4.8).
+struct IdleBody {
+    inner: Incoming,
+    timeout: Duration,
+    sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
+}
+
+impl IdleBody {
+    fn new(inner: Incoming, timeout: Duration) -> Self {
+        Self {
+            inner,
+            timeout,
+            sleep: Box::pin(tokio::time::sleep(timeout)),
+        }
+    }
+}
+
+impl hyper::body::Body for IdleBody {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        use std::future::Future;
+        use std::task::Poll;
+        let this = &mut *self;
+        match std::pin::Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(frame) => {
+                let deadline = tokio::time::Instant::now() + this.timeout;
+                this.sleep.as_mut().reset(deadline);
+                Poll::Ready(frame.map(|f| f.map_err(std::io::Error::other)))
+            }
+            Poll::Pending => match this.sleep.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "upstream response body idle timeout",
+                )))),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 fn close(mut response: Response<Body>) -> Response<Body> {

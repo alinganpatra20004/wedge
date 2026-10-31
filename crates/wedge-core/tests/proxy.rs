@@ -7,12 +7,14 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use futures_util::StreamExt;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
@@ -27,23 +29,37 @@ struct Upstream {
     hits: Arc<AtomicUsize>,
     /// Status returned for `/healthz`.
     health: Arc<AtomicU16>,
+    /// Every request target received, in order.
+    paths: Arc<Mutex<Vec<String>>>,
 }
+
+#[derive(Clone)]
+struct Seen {
+    hits: Arc<AtomicUsize>,
+    health: Arc<AtomicU16>,
+    paths: Arc<Mutex<Vec<String>>>,
+}
+
+type TestBody = BoxBody<Bytes, Infallible>;
 
 async fn upstream(name: &'static str) -> Upstream {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let hits = Arc::new(AtomicUsize::new(0));
-    let health = Arc::new(AtomicU16::new(200));
-    let (h, s) = (Arc::clone(&hits), Arc::clone(&health));
+    let seen = Seen {
+        hits: Arc::new(AtomicUsize::new(0)),
+        health: Arc::new(AtomicU16::new(200)),
+        paths: Arc::new(Mutex::new(Vec::new())),
+    };
+    let shared = seen.clone();
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 return;
             };
-            let (hits, health) = (Arc::clone(&h), Arc::clone(&s));
+            let seen = shared.clone();
             let service = service_fn(move |req: Request<Incoming>| {
-                let (hits, health) = (Arc::clone(&hits), Arc::clone(&health));
-                async move { Ok::<_, Infallible>(answer(name, req, &hits, &health).await) }
+                let seen = seen.clone();
+                async move { Ok::<_, Infallible>(answer(name, req, &seen).await) }
             });
             tokio::spawn(async move {
                 let _ = hyper::server::conn::http1::Builder::new()
@@ -52,36 +68,56 @@ async fn upstream(name: &'static str) -> Upstream {
             });
         }
     });
-    Upstream { addr, hits, health }
+    Upstream {
+        addr,
+        hits: seen.hits,
+        health: seen.health,
+        paths: seen.paths,
+    }
 }
 
-async fn answer(
-    name: &str,
-    req: Request<Incoming>,
-    hits: &AtomicUsize,
-    health: &AtomicU16,
-) -> Response<Full<Bytes>> {
+fn text(body: impl Into<Bytes>) -> TestBody {
+    Full::new(body.into()).boxed()
+}
+
+async fn answer(name: &str, req: Request<Incoming>, seen: &Seen) -> Response<TestBody> {
     let path = req
         .uri()
         .path_and_query()
         .map_or("", |pq| pq.as_str())
         .to_owned();
     if path == "/healthz" {
-        let mut res = Response::new(Full::new(Bytes::new()));
-        *res.status_mut() = hyper::StatusCode::from_u16(health.load(Ordering::Relaxed)).unwrap();
+        let mut res = Response::new(text(""));
+        let code = seen.health.load(Ordering::Relaxed);
+        *res.status_mut() = hyper::StatusCode::from_u16(code).unwrap();
         return res;
     }
-    hits.fetch_add(1, Ordering::Relaxed);
+    seen.hits.fetch_add(1, Ordering::Relaxed);
+    seen.paths.lock().unwrap().push(path.clone());
     if path.starts_with("/api/slow") {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+    if path.starts_with("/api/stall") {
+        // Sends a first chunk, then nothing, forever.
+        let chunks = futures_util::stream::iter([Ok(Frame::data(Bytes::from("partial")))])
+            .chain(futures_util::stream::pending());
+        return Response::new(BodyExt::boxed(StreamBody::new(chunks)));
+    }
     let method = req.method().to_string();
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("-")
-        .to_owned();
+    let get = |name: &str| {
+        req.headers()
+            .get_all(name)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    let (host, xff, xfp, xfh) = (
+        get("host"),
+        get("x-forwarded-for"),
+        get("x-forwarded-proto"),
+        get("x-forwarded-host"),
+    );
     let mut names: Vec<String> = req.headers().keys().map(|k| k.to_string()).collect();
     names.sort();
     let len = req
@@ -90,18 +126,40 @@ async fn answer(
         .await
         .map_or(0, |b| b.to_bytes().len());
     let line = format!(
-        "{name} {method} {path} host={host} len={len} headers={}",
+        "{name} {method} {path} host={host} len={len} xff={xff} xfp={xfp} xfh={xfh} headers={}",
         names.join(",")
     );
-    let mut res = Response::new(Full::new(Bytes::from(line)));
+    let mut res = Response::new(text(line));
+    let h = res.headers_mut();
     if path.starts_with("/api/hop") {
-        let h = res.headers_mut();
         h.insert("connection", "x-up-secret".parse().unwrap());
         h.insert("x-up-secret", "1".parse().unwrap());
         h.insert("keep-alive", "timeout=5".parse().unwrap());
         h.insert("x-up-kept", "1".parse().unwrap());
     }
+    if path.starts_with("/api/own-headers") {
+        h.insert("x-frame-options", "DENY".parse().unwrap());
+        h.insert("content-security-policy", "from-app".parse().unwrap());
+    }
     res
+}
+
+/// An upstream that answers every connection with fixed raw bytes, to test
+/// how wedge handles malformed responses (T4.10).
+async fn raw_upstream(reply: &'static [u8]) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(reply).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    addr
 }
 
 /// An address on which nothing listens.
@@ -118,8 +176,14 @@ struct Wedge {
 /// Starts wedge with `upstreams` (TOML) and a proxy-only vhost `a.test` whose
 /// `/api` routes to upstream "app".
 async fn wedge(upstreams: &str, route_extra: &str) -> Wedge {
+    wedge_with("", upstreams, route_extra).await
+}
+
+/// Like `wedge`, with extra `[server]` keys and `[vhost]`-level TOML in
+/// `route_extra`.
+async fn wedge_with(server_extra: &str, upstreams: &str, route_extra: &str) -> Wedge {
     let toml = format!(
-        "[server]\nlisten = [\"127.0.0.1:0\"]\ndefault_vhost = \"a\"\n\
+        "[server]\nlisten = [\"127.0.0.1:0\"]\ndefault_vhost = \"a\"\n{server_extra}\n\
          [server.limits]\nrequest_timeout_secs = 10\n{upstreams}\n\
          [[vhost]]\nname = \"a\"\nhosts = [\"a.test\"]\n\
          [[vhost.proxy]]\npath = \"/api\"\nupstream = \"app\"\n{route_extra}\n"
@@ -244,7 +308,10 @@ async fn hop_by_hop_headers_are_stripped_both_ways() {
     assert_eq!(status(&reply), 200, "{reply}");
     // Only Host and the ordinary header arrive upstream.
     let forwarded = body(&reply).rsplit_once("headers=").map_or("", |(_, h)| h);
-    assert_eq!(forwarded, "host,x-kept", "{reply}");
+    assert_eq!(
+        forwarded, "host,x-forwarded-for,x-forwarded-host,x-forwarded-proto,x-kept",
+        "{reply}"
+    );
     assert_eq!(header(&reply, "x-up-secret"), None, "{reply}");
     assert_eq!(header(&reply, "keep-alive"), None, "{reply}");
     assert_eq!(header(&reply, "x-up-kept"), Some("1"));
@@ -340,4 +407,162 @@ async fn health_checks_take_failing_servers_out() {
         get(&w, "/api/x").await;
     }
     assert!(bad.hits.load(Ordering::Relaxed) > 0);
+}
+
+/// The value of `key=` in the upstream's summary line.
+fn field<'a>(reply: &'a str, key: &str) -> &'a str {
+    let line = body(reply);
+    let start = line
+        .find(&format!(" {key}="))
+        .map_or(line.len(), |i| i + key.len() + 2);
+    line[start..].split(' ').next().unwrap_or("")
+}
+
+#[tokio::test]
+async fn spoofed_forwarding_headers_are_replaced() {
+    let up = upstream("one").await;
+    let spoof = "GET /api/x HTTP/1.1\r\nHost: a.test\r\nConnection: close\r\n\
+                 X-Forwarded-For: 6.6.6.6\r\nX-Forwarded-Proto: https\r\n\
+                 X-Forwarded-Host: admin.internal\r\nX-Real-IP: 6.6.6.6\r\n\
+                 Forwarded: for=6.6.6.6\r\n\r\n";
+    // Untrusted peer: everything it claimed is discarded (T4.6).
+    let w = wedge(&pool(&[up.addr], ""), "").await;
+    let reply = send(&w, spoof).await;
+    assert_eq!(field(&reply, "xff"), "127.0.0.1", "{reply}");
+    assert_eq!(field(&reply, "xfp"), "http", "{reply}");
+    assert_eq!(field(&reply, "xfh"), "a.test", "{reply}");
+    let headers = field(&reply, "headers");
+    assert!(
+        !headers.contains("x-real-ip") && !headers.contains("forwarded,"),
+        "{reply}"
+    );
+
+    // Trusted peer (a load balancer): its chain is extended, not replaced.
+    let w = wedge_with(
+        "trusted_proxies = [\"127.0.0.0/8\"]",
+        &pool(&[up.addr], ""),
+        "",
+    )
+    .await;
+    let reply = send(&w, spoof).await;
+    assert_eq!(field(&reply, "xff"), "6.6.6.6,", "{reply}");
+    assert!(body(&reply).contains("xff=6.6.6.6, 127.0.0.1 "), "{reply}");
+    assert_eq!(field(&reply, "xfp"), "https", "{reply}");
+    assert_eq!(field(&reply, "xfh"), "admin.internal", "{reply}");
+}
+
+#[tokio::test]
+async fn application_security_headers_win_over_defaults() {
+    let up = upstream("one").await;
+    // The app sets its own X-Frame-Options and CSP on /api/own-headers.
+    let w = wedge(&pool(&[up.addr], ""), "").await;
+    let own = get(&w, "/api/own-headers").await;
+    assert_eq!(header(&own, "x-frame-options"), Some("DENY"), "{own}");
+    assert_eq!(header(&own, "content-security-policy"), Some("from-app"));
+    // Where the app sets nothing, the defaults are added.
+    let plain = get(&w, "/api/x").await;
+    assert_eq!(
+        header(&plain, "x-frame-options"),
+        Some("SAMEORIGIN"),
+        "{plain}"
+    );
+    assert_eq!(header(&plain, "x-content-type-options"), Some("nosniff"));
+    // Headers the operator configured still override the app (T4.12).
+    let w = wedge(
+        &pool(&[up.addr], ""),
+        "[vhost.headers]\n\"Content-Security-Policy\" = \"from-operator\"\n",
+    )
+    .await;
+    let own = get(&w, "/api/own-headers").await;
+    assert_eq!(
+        header(&own, "content-security-policy"),
+        Some("from-operator"),
+        "{own}"
+    );
+    assert_eq!(header(&own, "x-frame-options"), Some("DENY"), "{own}");
+}
+
+#[tokio::test]
+async fn stalled_response_bodies_are_cut_off() {
+    let up = upstream("one").await;
+    let w = wedge(&pool(&[up.addr], "response_timeout_secs = 1"), "").await;
+    let started = std::time::Instant::now();
+    let reply = get(&w, "/api/stall").await;
+    // The head and the first chunk arrive; then the body is aborted.
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert!(reply.contains("partial"), "{reply}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn smuggled_requests_never_reach_the_upstream() {
+    let up = upstream("one").await;
+    let w = wedge(&pool(&[up.addr], ""), "").await;
+    // CL.TE: Content-Length covers only part of a chunked body that hides a
+    // second request. hyper honours Transfer-Encoding and drops the
+    // Content-Length, so the hidden request is just 30 bytes of body.
+    let clte = "POST /api/a HTTP/1.1\r\nHost: a.test\r\nContent-Length: 4\r\n\
+                Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n\
+                1e\r\nGET /api/smuggled HTTP/1.1\r\n\r\n\r\n0\r\n\r\n";
+    let reply = send(&w, clte).await;
+    assert!(matches!(status(&reply), 200 | 400), "{reply}");
+    if status(&reply) == 200 {
+        assert!(body(&reply).contains("POST /api/a ") && body(&reply).contains("len=30"));
+    }
+    // A malformed chunked body is the client's error: 400, not 502.
+    let bad_chunk = "POST /api/a HTTP/1.1\r\nHost: a.test\r\nTransfer-Encoding: chunked\r\n\r\n\
+                     1c\r\nGET /api/smuggled HTTP/1.1\r\n\r\n\r\n0\r\n\r\n";
+    let reply = send(&w, bad_chunk).await;
+    assert_eq!(status(&reply), 400, "{reply}");
+    // TE.TE with an obfuscated second Transfer-Encoding.
+    let tete = "POST /api/b HTTP/1.1\r\nHost: a.test\r\nTransfer-Encoding: chunked\r\n\
+                Transfer-Encoding: xchunked\r\n\r\n0\r\n\r\nGET /api/smuggled HTTP/1.1\r\n\
+                Host: a.test\r\n\r\n";
+    let reply = send(&w, tete).await;
+    assert!(status(&reply) != 0, "{reply}");
+    // Conflicting Content-Length values are rejected outright.
+    let dup = "POST /api/c HTTP/1.1\r\nHost: a.test\r\nContent-Length: 1\r\n\
+               Content-Length: 30\r\n\r\nxGET /api/smuggled HTTP/1.1\r\n\r\n";
+    let reply = send(&w, dup).await;
+    assert_eq!(status(&reply), 400, "{reply}");
+    // Give any stray connection a moment, then check what the upstream saw.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let paths = up.paths.lock().unwrap().clone();
+    assert!(
+        paths.iter().all(|p| !p.contains("smuggled")),
+        "upstream received a smuggled request: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_upstream_responses_become_502() {
+    let cases: [&'static [u8]; 4] = [
+        // Header name with a space.
+        b"HTTP/1.1 200 OK\r\nBad Header: x\r\nContent-Length: 2\r\n\r\nok",
+        // Obsolete line folding (could hide an injected header).
+        b"HTTP/1.1 200 OK\r\nX-A: a\r\n Set-Cookie: evil=1\r\nContent-Length: 2\r\n\r\nok",
+        // Two different Content-Length values.
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 9\r\n\r\nok",
+        // Not HTTP at all.
+        b"SSH-2.0-OpenSSH_9.6\r\n",
+    ];
+    for reply_bytes in cases {
+        let addr = raw_upstream(reply_bytes).await;
+        let w = wedge(&pool(&[addr], ""), "").await;
+        let reply = get(&w, "/api/x").await;
+        assert_eq!(
+            status(&reply),
+            502,
+            "{:?} => {reply}",
+            String::from_utf8_lossy(reply_bytes)
+        );
+        assert!(
+            !reply.to_ascii_lowercase().contains("set-cookie"),
+            "{reply}"
+        );
+    }
 }

@@ -15,6 +15,7 @@
 
 mod merge;
 mod model;
+mod net;
 mod schema;
 mod secret;
 
@@ -25,6 +26,7 @@ use std::path::{Path, PathBuf};
 pub use model::{
     Config, Limits, ServerConfig, TlsSettings, TlsVersion, VhostTls, VirtualHost, RESERVED_HEADERS,
 };
+pub use net::IpNet;
 pub use schema::json_schema;
 pub use secret::{Secret, SecretError, SecretRef, MAX_SECRET_SIZE};
 

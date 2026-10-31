@@ -388,7 +388,10 @@ async fn route(
                 let response = finish(response::status(StatusCode::METHOD_NOT_ALLOWED));
                 return (response, Some(index));
             }
-            let response = state.proxy.forward(proxy_route, req, conn.peer).await;
+            let response = state
+                .proxy
+                .forward(proxy_route, req, conn.peer, conn.tls_vhost.is_some())
+                .await;
             return (response, Some(index));
         }
     }

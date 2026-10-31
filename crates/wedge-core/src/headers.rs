@@ -12,6 +12,7 @@ use hyper::header::{HeaderName, HeaderValue, LOCATION, STRICT_TRANSPORT_SECURITY
 use hyper::{Response, StatusCode, Uri};
 use wedge_config::Config;
 
+use crate::proxy::Proxied;
 use crate::response::{self, Body};
 use crate::vhost::Router;
 
@@ -22,8 +23,9 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("referrer-policy", "strict-origin-when-cross-origin"),
 ];
 
-/// A header to set (`Some`) or remove (`None`).
-type Rule = (HeaderName, Option<HeaderValue>);
+/// A header to set (`Some`) or remove (`None`), and whether the operator set
+/// it in `[vhost.headers]` (explicit) rather than it being a default.
+type Rule = (HeaderName, Option<HeaderValue>, bool);
 
 /// Header rules for all vhosts, built once at startup.
 pub(crate) struct Policy {
@@ -52,6 +54,7 @@ impl Policy {
                 (
                     HeaderName::from_static(n),
                     Some(HeaderValue::from_static(v)),
+                    false,
                 )
             })
             .collect();
@@ -68,8 +71,8 @@ impl Policy {
                         format!("vhost {:?}: bad value for header {name}", vhost.name)
                     })?)
                 };
-                rules.retain(|(existing, _)| *existing != name);
-                rules.push((name, value));
+                rules.retain(|(existing, _, _)| *existing != name);
+                rules.push((name, value, true));
             }
             let hsts = vhost
                 .tls
@@ -114,7 +117,8 @@ impl Policy {
     }
 
     /// Applies the header rules of `vhost` (or the defaults), and HSTS when
-    /// the response goes out over TLS for `tls_vhost`.
+    /// the response goes out over TLS for `tls_vhost`. On a proxied response
+    /// a default never replaces a header the application set (T4.12).
     pub(crate) fn apply(
         &self,
         response: &mut Response<Body>,
@@ -124,8 +128,12 @@ impl Policy {
         let rules = vhost
             .and_then(|i| self.vhosts.get(i))
             .map_or(&self.defaults, |v| &v.rules);
+        let proxied = response.extensions().get::<Proxied>().is_some();
         let headers = response.headers_mut();
-        for (name, value) in rules {
+        for (name, value, explicit) in rules {
+            if proxied && !explicit && headers.contains_key(name) {
+                continue;
+            }
             match value {
                 Some(value) => {
                     headers.insert(name.clone(), value.clone());

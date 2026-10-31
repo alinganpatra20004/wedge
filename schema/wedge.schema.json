@@ -1,5 +1,9 @@
 {
   "$defs": {
+    "IpNet": {
+      "description": "IP address or CIDR range, such as \"10.0.0.0/8\" or \"::1\".",
+      "type": "string"
+    },
     "Limits": {
       "additionalProperties": false,
       "description": "Connection and request limits (`[server.limits]`). See the threat model,\nentries T2.5 to T2.8.",
@@ -146,6 +150,13 @@
         "tls": {
           "$ref": "#/$defs/TlsSettings",
           "description": "TLS protocol settings shared by all TLS listeners."
+        },
+        "trusted_proxies": {
+          "description": "Peers (such as a load balancer in front of wedge) whose\n`X-Forwarded-For` wedge extends instead of replacing (T4.6).",
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
         }
       },
       "type": "object"

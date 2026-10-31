@@ -3,6 +3,13 @@
 #
 # Reverse proxy example. Rename to 30-proxy.toml to use it.
 # Upstream servers are IP:port only (no host names, so no DNS rebinding).
+#
+# wedge replaces X-Forwarded-For/-Proto/-Host and drops X-Real-IP and
+# Forwarded sent by clients. If a load balancer sits in front of wedge, list
+# it here so its X-Forwarded-For chain is extended instead of replaced:
+#
+# [server]
+# trusted_proxies = ["10.0.0.0/8"]
 
 [[upstream]]
 name = "app"
