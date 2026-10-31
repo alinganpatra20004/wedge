@@ -55,6 +55,14 @@ pub(crate) fn install(config: &Path, allow_unprotected: bool) -> Result<(), Stri
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe = std::fs::canonicalize(&exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    // canonicalize gives a `\\?\C:\...` path; register the ordinary form,
+    // which the Service Control Manager starts reliably (and quotes, so the
+    // space in "Program Files" is safe).
+    let exe = PathBuf::from(
+        exe.as_os_str()
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\"),
+    );
     if !allow_unprotected && !in_program_files(&exe) {
         return Err(format!(
             "{} is not under Program Files, so other users may be able to replace it.\n\
@@ -114,7 +122,22 @@ fn in_program_files(exe: &Path) -> bool {
         .iter()
         .filter_map(std::env::var_os)
         .filter_map(|dir| std::fs::canonicalize(dir).ok())
-        .any(|dir| exe.starts_with(dir))
+        .any(|dir| is_inside(exe, &dir))
+}
+
+/// `path` lies inside `dir`, ignoring `\\?\` prefixes and letter case
+/// (Windows paths are case-insensitive).
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let plain = |p: &Path| {
+        p.as_os_str()
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    let (path, dir) = (plain(path), plain(dir));
+    path.strip_prefix(&dir)
+        .is_some_and(|rest| rest.starts_with('\\'))
 }
 
 /// Gives the service account `rights` on `path` with icacls.
@@ -254,6 +277,29 @@ fn run_service(config: &Path) -> Result<(), windows_service::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_files_check_ignores_prefix_and_case() {
+        let dir = Path::new(r"\\?\C:\Program Files");
+        assert!(is_inside(
+            Path::new(r"C:\Program Files\wedge\wedge.exe"),
+            dir
+        ));
+        assert!(is_inside(
+            Path::new(r"c:\program files\WEDGE\wedge.exe"),
+            dir
+        ));
+        assert!(is_inside(
+            Path::new(r"\\?\C:\Program Files\wedge\wedge.exe"),
+            dir
+        ));
+        assert!(!is_inside(
+            Path::new(r"C:\Program Files Evil\wedge.exe"),
+            dir
+        ));
+        assert!(!is_inside(Path::new(r"C:\Users\x\wedge.exe"), dir));
+        assert!(!is_inside(Path::new(r"C:\Program Files"), dir));
+    }
 
     #[test]
     fn launch_arguments_name_config_and_log() {
