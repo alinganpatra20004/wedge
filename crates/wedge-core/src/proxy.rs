@@ -23,6 +23,7 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 use tokio::sync::watch;
 use wedge_config::{Config, IpNet};
 
+use crate::metrics::{Metrics, OUTCOMES};
 use crate::path;
 use crate::response::{self, Body};
 
@@ -149,6 +150,18 @@ impl Proxy {
         }
     }
 
+    /// (upstream name, server address, in rotation) for every server.
+    pub(crate) fn health_snapshot(&self) -> Vec<(String, String, bool)> {
+        self.pools
+            .iter()
+            .flat_map(|pool| {
+                pool.backends
+                    .iter()
+                    .map(|b| (pool.name.clone(), b.addr.to_string(), pool.is_up(b)))
+            })
+            .collect()
+    }
+
     /// The route of `vhost` whose prefix matches `path`: equal, or followed by
     /// `/`. So `/api` matches `/api` and `/api/x` but not `/apix`.
     pub(crate) fn route(&self, vhost: usize, path: &str) -> Option<&Route> {
@@ -176,8 +189,13 @@ impl Proxy {
         req: Request<Incoming>,
         peer: SocketAddr,
         tls: bool,
+        metrics: &Metrics,
     ) -> Response<Body> {
         let pool = &self.pools[route.pool];
+        let record = |outcome: &str| {
+            let index = OUTCOMES.iter().position(|o| *o == outcome).unwrap_or(0);
+            metrics.upstream(route.pool, index);
+        };
         // T4.13: the upstream must resolve the same path wedge matched.
         if !path::proxy_path_ok(req.uri().path()) {
             return response::status(StatusCode::BAD_REQUEST);
@@ -266,10 +284,12 @@ impl Proxy {
                 tokio::time::timeout(pool.response_timeout, pool.client.request(upstream_req));
             match sent.await {
                 Ok(Ok(upstream_res)) => {
+                    record("ok");
                     pool.success(backend);
                     return into_client_response(upstream_res, pool.response_timeout);
                 }
                 Ok(Err(e)) if e.is_connect() => {
+                    record("connect_error");
                     pool.failure(backend);
                     tracing::warn!(
                         upstream = %pool.name,
@@ -286,6 +306,7 @@ impl Proxy {
                     if client_failed.load(Ordering::Relaxed) {
                         return close(response::status(StatusCode::BAD_REQUEST));
                     }
+                    record("error");
                     tracing::warn!(
                         upstream = %pool.name,
                         server = %backend.addr,
@@ -296,6 +317,7 @@ impl Proxy {
                     return response::status(StatusCode::BAD_GATEWAY);
                 }
                 Err(_) => {
+                    record("timeout");
                     tracing::warn!(
                         upstream = %pool.name,
                         server = %backend.addr,

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Admin listener example. Rename to 40-admin.toml to use it.
+# Serves GET /metrics (Prometheus text format) and, with a token,
+# POST /-/reload. Keep it on loopback or a private management network.
+
+[server.admin]
+listen = "127.0.0.1:9900"
+allow = ["127.0.0.0/8", "::1"]   # the default; other clients are refused before any HTTP
+# token = "env:WEDGE_ADMIN_TOKEN" # needed for POST /-/reload; never inline
+
+# Prometheus scrape config:
+#   - job_name: wedge
+#     static_configs:
+#       - targets: ["127.0.0.1:9900"]

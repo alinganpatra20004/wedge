@@ -1,5 +1,37 @@
 {
   "$defs": {
+    "AdminConfig": {
+      "additionalProperties": false,
+      "description": "The admin listener (`[server.admin]`): `GET /metrics` and\n`POST /-/reload`. See the threat model, T5.1 to T5.6.",
+      "properties": {
+        "allow": {
+          "description": "Client addresses allowed to connect. Defaults to loopback only.",
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "listen": {
+          "description": "Address of the admin listener, such as `\"127.0.0.1:9900\"`. Keep it\noff public interfaces.",
+          "type": "string"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Bearer token required for `POST /-/reload`, as a secret reference\n(`env:NAME` or `file:/path`). Without it, reload over HTTP is off."
+        }
+      },
+      "required": [
+        "listen"
+      ],
+      "type": "object"
+    },
     "IpNet": {
       "description": "IP address or CIDR range, such as \"10.0.0.0/8\" or \"::1\".",
       "type": "string"
@@ -119,6 +151,17 @@
       "additionalProperties": false,
       "description": "Process-wide server settings (`[server]`).",
       "properties": {
+        "admin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Admin listener for metrics and reload. Off unless set."
+        },
         "default_vhost": {
           "default": null,
           "description": "Name of the vhost that answers requests whose Host matches no vhost.\nWhen unset, such requests get 421 Misdirected Request.",

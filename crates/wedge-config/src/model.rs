@@ -112,6 +112,9 @@ pub struct ServerConfig {
     /// `X-Forwarded-For` wedge extends instead of replacing (T4.6).
     #[serde(default)]
     pub trusted_proxies: Vec<IpNet>,
+    /// Admin listener for metrics and reload. Off unless set.
+    #[serde(default)]
+    pub admin: Option<AdminConfig>,
     /// Name of the vhost that answers requests whose Host matches no vhost.
     /// When unset, such requests get 421 Misdirected Request.
     #[serde(default)]
@@ -172,6 +175,30 @@ impl Default for Limits {
             h2_max_concurrent_streams: 100,
         }
     }
+}
+
+/// The admin listener (`[server.admin]`): `GET /metrics` and
+/// `POST /-/reload`. See the threat model, T5.1 to T5.6.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AdminConfig {
+    /// Address of the admin listener, such as `"127.0.0.1:9900"`. Keep it
+    /// off public interfaces.
+    pub listen: SocketAddr,
+    /// Client addresses allowed to connect. Defaults to loopback only.
+    #[serde(default = "default_admin_allow")]
+    pub allow: Vec<IpNet>,
+    /// Bearer token required for `POST /-/reload`, as a secret reference
+    /// (`env:NAME` or `file:/path`). Without it, reload over HTTP is off.
+    #[serde(default)]
+    pub token: Option<SecretRef>,
+}
+
+fn default_admin_allow() -> Vec<IpNet> {
+    ["127.0.0.0/8", "::1"]
+        .into_iter()
+        .filter_map(|s| IpNet::try_from(s.to_owned()).ok())
+        .collect()
 }
 
 /// TLS protocol settings (`[server.tls]`). See the threat model, T3.1.
@@ -349,7 +376,14 @@ impl Config {
             }
         }
         let mut listen = HashSet::new();
-        for addr in self.server.listen.iter().chain(&self.server.listen_tls) {
+        let admin = self.server.admin.as_ref().map(|a| &a.listen);
+        for addr in self
+            .server
+            .listen
+            .iter()
+            .chain(&self.server.listen_tls)
+            .chain(admin)
+        {
             // Port 0 asks the OS for a free port, so those never collide.
             if addr.port() != 0 && !listen.insert(addr) {
                 errors.push(format!("duplicate listen address {addr}"));
