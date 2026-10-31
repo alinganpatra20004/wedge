@@ -54,6 +54,12 @@ judgement of impact and likelihood, stated per finding.
 | 7.3 Dynamic testing | done | none (3 Low findings fixed: F-06 to F-08; F-01, F-02 mitigated) |
 | 7.4 Robustness | done | none (F-09 Medium and F-10 Medium fixed) |
 
+Ten findings: 0 critical, 0 high, 4 medium, 6 low. Eight are fixed with
+regression tests and re-tested on a rebuilt image; two (F-01, F-02) are
+mitigated in every shipped configuration and left to the site by design.
+All fixes ship in v0.1.1. The release workflow at f07d829 (dry run
+41221400158) passes with the new artifact scans as release gates.
+
 ## 7.1 Supply chain
 
 Method: every release binary is now built with `cargo auditable`, so the
@@ -205,9 +211,17 @@ by its start, redacted, and the rest dropped up to its newline. Fixed in
 d1981c2 with a regression test that splits a 9 KB token into 1,400-byte
 reads; the new `request_headers` fuzz target checks it for arbitrary splits.
 
-Fuzzing: the five targets ran for 15 minutes each (Docker
-`rust:1-bookworm`, nightly, cargo-fuzz, libFuzzer `-max_len=8192`); see
-the table below.
+Fuzzing: the five targets ran for 15 minutes each, three times the gate
+runs of Phases 2 to 5 (Docker `rust:1-bookworm`, nightly, cargo-fuzz,
+libFuzzer `-max_len=8192`, code at f07d829). No crashes, no artifacts.
+
+| Target | What it checks | Runs |
+|---|---|---|
+| `config_parse` | TOML and JSON Schema validation of arbitrary config text | 212,779 |
+| `proxy_request` | proxy path check and header sanitiser (no traversal, no forged forwarding headers) | 509,934 |
+| `request_headers` (new) | Host normalization, Range bounds, capture redaction under arbitrary read splits | 344,110 |
+| `request_path` | static path parser (no escape from the root, no hidden files) | 2,132,500 |
+| `secret_ref` | `env:` / `file:` secret reference parsing | 86,764,121 |
 
 ## Findings
 
