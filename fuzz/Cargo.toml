@@ -40,3 +40,10 @@ path = "fuzz_targets/request_path.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "proxy_request"
+path = "fuzz_targets/proxy_request.rs"
+test = false
+doc = false
+bench = false

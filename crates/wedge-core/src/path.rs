@@ -101,7 +101,7 @@ pub(crate) fn proxy_path_ok(raw: &str) -> bool {
 }
 
 /// Decodes `%XX` escapes. Returns `None` for a truncated or non-hex escape.
-fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
     while i < input.len() {

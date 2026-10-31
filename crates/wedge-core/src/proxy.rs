@@ -28,7 +28,7 @@ use crate::response::{self, Body};
 
 /// Headers that describe one connection, not the message (RFC 9110 §7.6.1),
 /// plus proxy credentials. Never forwarded in either direction (T4.5).
-const HOP_BY_HOP: &[&str] = &[
+pub(crate) const HOP_BY_HOP: &[&str] = &[
     "connection",
     "keep-alive",
     "proxy-connection",
@@ -410,7 +410,12 @@ pub(crate) struct Proxied;
 /// Replaces client-supplied identity headers with values wedge knows (T4.6).
 /// From a trusted proxy, an existing `X-Forwarded-For` chain and the
 /// `X-Forwarded-Proto`/`-Host` it set are kept, and the peer is appended.
-fn set_forwarding_headers(headers: &mut HeaderMap, peer: SocketAddr, tls: bool, trusted: bool) {
+pub(crate) fn set_forwarding_headers(
+    headers: &mut HeaderMap,
+    peer: SocketAddr,
+    tls: bool,
+    trusted: bool,
+) {
     const XFF: &str = "x-forwarded-for";
     const XFP: &str = "x-forwarded-proto";
     const XFH: &str = "x-forwarded-host";
