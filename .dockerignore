@@ -2,10 +2,10 @@ target
 fuzz/target
 fuzz/corpus
 fuzz/artifacts
-.git
-.agent
-.claude
-CLAUDE.md
+# Dot-directories (.git, .github and local tool state) and top-level notes
+# are not needed to build the image.
+.*
+*.md
 build/*.tar
 build/*.tar.gz
 build/*.zip
