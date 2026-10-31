@@ -54,6 +54,14 @@ contents:
   - src: examples
     dst: /usr/share/doc/wedge/examples
     type: tree
+  - src: docs/guide
+    dst: /usr/share/doc/wedge/guide
+    type: tree
+  - src: build/guide
+    dst: /usr/share/doc/wedge/html
+    type: tree
+  - src: SECURITY.md
+    dst: /usr/share/doc/wedge/SECURITY.md
 
 scripts:
   preinstall: packaging/linux/preinstall.sh

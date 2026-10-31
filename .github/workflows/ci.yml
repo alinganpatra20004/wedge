@@ -26,6 +26,17 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --all --locked -q
 
+  # The user guide must match the code: every example validates, and the
+  # configuration reference is regenerated from the schema without changes.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pwsh scripts/check-doc-examples.ps1
+      - run: pwsh scripts/gen-config-reference.ps1
+      - run: git diff --exit-code docs/guide/configuration-reference.md
+
   msrv:
     runs-on: ubuntu-latest
     steps:

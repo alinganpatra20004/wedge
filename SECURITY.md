@@ -1,0 +1,66 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright (c) Alingan Patra -->
+# Security policy
+
+## Supported versions
+
+| Version | Security fixes |
+|---|---|
+| 0.1.x | yes |
+
+Until 1.0, only the latest 0.x release receives fixes.
+
+## Reporting a vulnerability
+
+Please report security problems privately through GitHub:
+**[Report a vulnerability](https://github.com/alinganpatra20004/wedge/security/advisories/new)**
+(the repository's Security tab). Do not open a public issue or pull request
+for a suspected vulnerability.
+
+Please include:
+
+- the wedge version (`wedge --version`) and operating system;
+- the relevant configuration, with secrets removed;
+- steps or a request that reproduces the problem, and what you expected;
+- the impact as you understand it.
+
+What to expect:
+
+- an acknowledgement within 7 days;
+- an assessment (severity using CVSS v3.1, affected versions) within 14 days;
+- a fix, or a mitigation if a fix takes longer, as soon as practical, with a
+  GitHub security advisory and a CVE where appropriate;
+- credit in the advisory if you want it.
+
+Please give us a reasonable time to release a fix before disclosing details
+publicly; we aim for 90 days or less.
+
+## Scope
+
+In scope: the `wedge` binary, its default configuration, the packages,
+installers and container image published on the
+[releases page](https://github.com/alinganpatra20004/wedge/releases), and the
+release pipeline. Out of scope: vulnerabilities in applications behind the
+reverse proxy, configurations that disable documented safeguards (for
+example `log_secrets = true` or `--allow-unprotected-path`), and denial of
+service that needs more traffic than the configured limits allow.
+
+## How wedge is checked
+
+Each release passes cargo-audit, cargo-deny, Semgrep, clippy and the test
+suite, and is fuzzed. The [threat model](docs/security/threat-model.md) lists
+every threat considered and the test for each mitigation; the
+[verification log](docs/security/verification.md) records the results of
+each phase's security checks, including known limitations and residual
+risks. No software is free of vulnerabilities; these checks reduce risk, they
+do not remove it.
+
+## Verifying downloads
+
+Every release asset is listed in `SHA256SUMS` and has a GitHub build
+provenance attestation:
+
+```sh
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify <file> --repo alinganpatra20004/wedge
+```

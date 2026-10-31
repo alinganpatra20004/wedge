@@ -49,7 +49,14 @@ function New-Layout([string]$Target, [string]$Binary) {
     Copy-Item $Binary $dir
     Copy-Item LICENSE, NOTICE, README.md $dir
     Copy-Item -Recurse examples (Join-Path $dir 'examples')
-    if (Test-Path docs/guide) { Copy-Item -Recurse docs/guide (Join-Path $dir 'docs') }
+    # The user guide ships with every build: Markdown, plus HTML when
+    # scripts/render-guide.ps1 has produced build/guide.
+    $docs = Join-Path $dir 'docs'
+    New-Item -ItemType Directory -Force $docs | Out-Null
+    Copy-Item -Recurse docs/guide (Join-Path $docs 'guide')
+    Copy-Item -Recurse docs/install (Join-Path $docs 'install')
+    Copy-Item SECURITY.md $docs
+    if (Test-Path build/guide) { Copy-Item -Recurse build/guide (Join-Path $docs 'html') }
     if ($Target -like '*linux*') {
         Copy-Item packaging/systemd/wedge.service $dir
         Copy-Item -Recurse packaging/openrc (Join-Path $dir 'openrc')
