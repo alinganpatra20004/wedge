@@ -113,6 +113,36 @@ upstreams.
 | T4.13 | Path confusion: `/api/../admin` or `/api/%2e%2e/admin` matches the `/api/` route in wedge but the upstream resolves it to `/admin` | T, E | A01 / V12.3.1 | Proxied paths are decoded once for checking; any `.` or `..` segment, encoded `/` or `\`, or NUL gives 400; the original encoded path is forwarded unchanged | verified (`proxy_paths`, `path_confusion_and_tunnels_are_refused`) |
 | T4.12 | Security headers from wedge clobber the application's own (for example a stricter CSP) | T | A05 / V14.4 | On proxied responses default security headers are added only when absent; headers set explicitly in `[vhost.headers]` still override; HSTS rules unchanged | verified (`application_security_headers_win_over_defaults`) |
 
+## Phase 5: Operations
+
+New surfaces: an admin listener (metrics and reload), configuration reload
+while serving, OS service integration, and an opt-in debug capture log.
+
+Design: `[server.admin]` is off unless configured. When on, it is a separate
+listener (default `127.0.0.1:9900`) that serves `GET /metrics` (Prometheus
+text format) and `POST /-/reload`. Clients must come from `allow` (default
+loopback only). Reload also needs `Authorization: Bearer <token>`, where
+`token` is a secret reference. `SIGHUP` on Unix and `wedge reload` (which
+calls the admin endpoint) trigger the same reload. A reload builds a
+complete new state off to the side (config, certificates, upstreams) and
+swaps it in only if everything succeeded. Listen addresses, the admin
+settings and the debug capture flags need a restart.
+
+| # | Threat | STRIDE | OWASP / ASVS | Mitigation | Status |
+|---|---|---|---|---|---|
+| T5.1 | Metrics reveal internals (vhost names, upstream addresses, error rates) to the internet | I | A01, A05 / V14.3 | Admin listener is separate from public listeners, off by default, loopback by default; IP `allow` list checked before anything else; config rejects an admin address that is also a public listener; startup warning when bound to a non-loopback address | planned |
+| T5.2 | Metric label explosion exhausts memory (attacker-chosen Host, path or method as labels) | D | A05 / V11.1.4 | Labels come only from config (vhost and upstream names) or fixed sets (method buckets, status classes); request data is never a label | planned |
+| T5.3 | Unauthorized reload (local process, browser CSRF to localhost, DNS rebinding to 127.0.0.1) | E, T | A01, A07 / V4.1.1, V13.2.3 | Reload needs `POST` plus a bearer token compared in constant time; token by secret reference only; no CORS, so browsers cannot send the header cross-origin; `Host` must be an IP literal or `localhost` (defeats DNS rebinding) | planned |
+| T5.4 | A bad config or certificate applied by reload takes the server down, or leaves it half-updated | D, T | A05, A08 / V14.1.1 | Validate and build the whole new state first; swap atomically; on any error keep serving the old state and log why; in-flight requests finish on the state they started with | planned |
+| T5.5 | Reload flood or concurrent reloads race | D | A04 | One reload at a time (a lock); further requests wait or get 409; reload is rate-limited to one per second | planned |
+| T5.6 | Reload silently weakens security (for example, turns on debug capture or `log_secrets`, or moves the admin listener) | T, E | A05 / V14.1.1 | Listeners, admin settings and all `[server.debug]` settings are restart-only; a reload that changes them is refused with a clear error | planned |
+| T5.7 | Service runs with more privilege than needed (root/LocalSystem); a compromise owns the host | E | A05 / V14.1.2 | systemd unit: dedicated `wedge` user, `CAP_NET_BIND_SERVICE` only, `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `RestrictAddressFamilies`, `LimitCORE=0`; Windows service: virtual account `NT SERVICE\wedge`, not LocalSystem | planned |
+| T5.8 | Service install leaves config or keys writable by the service account | T, I | A05 / V14.1.3 | Install docs and packages: config and keys owned by root (Windows: Administrators), readable by the service account, not writable; key files mode 0600/0640 | planned |
+| T5.9 | Debug capture log exposes sensitive data at rest (bodies, cookies, tokens; all of it when `log_secrets` is on) | I | A02, A09 / V7.1.1, V8.3.4 | Off by default; restart-only; credentials redacted unless `log_secrets`; file created owner-only (0600; Windows: owner ACL only); loud startup warning repeated every hour while on; docs mark it "never in production" | planned |
+| T5.10 | Debug capture fills the disk or slows the server | D | A05 | Per-request byte cap, file size cap and rotation count; capture writes go through a bounded queue and are dropped (and counted) when it is full | planned |
+| T5.11 | Packet capture (`tcp_headers`) records other processes' traffic, or needs a privilege that widens the attack surface | I, E | A01, A05 | BPF filter limited to wedge's own listen ports; optional build feature; needs CAP_NET_RAW or admin, which the docs say to grant only for the debugging session; if capture cannot start, wedge continues without it | planned |
+| T5.12 | Capture log injection (control characters, fake log lines) | T | A09 / V7.3.1 | Captured bytes are written as hex plus escaped ASCII, never raw | planned |
+
 ## Residual risks and assumptions
 
 - The OS, filesystem permissions and the operator's account are trusted. wedge
