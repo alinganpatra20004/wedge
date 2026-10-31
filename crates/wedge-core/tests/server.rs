@@ -106,6 +106,33 @@ async fn slowloris_connection_is_closed_after_header_timeout() {
 }
 
 #[tokio::test]
+async fn silent_connection_is_closed_after_header_timeout() {
+    let (addr, _stop, _task) = start("header_timeout_secs = 1\nidle_timeout_secs = 60").await;
+    let started = Instant::now();
+    let reply = exchange(addr, b"", Duration::from_secs(10)).await;
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(5), "held for {elapsed:?}");
+    assert!(reply.is_empty(), "{reply}");
+}
+
+#[tokio::test]
+async fn silent_connections_do_not_lock_out_clients() {
+    let (addr, _stop, _task) =
+        start("header_timeout_secs = 1\nidle_timeout_secs = 60\nmax_connections = 1").await;
+    // Holds the only slot without ever sending a byte.
+    let _silent = TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = Instant::now();
+    let reply = exchange(addr, format!("GET / HTTP/1.1\r\n{CLOSE}").as_bytes(), WAIT).await;
+    assert!(reply.starts_with("HTTP/1.1 "), "{reply}");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "waited {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
 async fn ambiguous_framing_is_rejected() {
     // Content-Length together with Transfer-Encoding is a smuggling vector (T2.9).
     let (addr, _stop, _task) = start("").await;

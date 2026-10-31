@@ -134,11 +134,12 @@ pub struct ServerConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
     /// Seconds allowed to receive a complete request head, including the wait
-    /// for the next request on a kept-alive connection.
+    /// for the first byte of a new connection and for the next request on a
+    /// kept-alive connection.
     #[schemars(range(min = 1, max = 300))]
     pub header_timeout_secs: u64,
     /// Seconds a connection may go without any bytes read or written before it
-    /// is closed. Covers clients that connect and never send a request.
+    /// is closed (for example, a client that stops reading a response).
     #[schemars(range(min = 1, max = 3600))]
     pub idle_timeout_secs: u64,
     /// Seconds allowed for a handler to produce a response head.

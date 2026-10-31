@@ -109,7 +109,7 @@
         },
         "header_timeout_secs": {
           "default": 10,
-          "description": "Seconds allowed to receive a complete request head, including the wait\nfor the next request on a kept-alive connection.",
+          "description": "Seconds allowed to receive a complete request head, including the wait\nfor the first byte of a new connection and for the next request on a\nkept-alive connection.",
           "format": "uint64",
           "maximum": 300,
           "minimum": 1,
@@ -117,7 +117,7 @@
         },
         "idle_timeout_secs": {
           "default": 60,
-          "description": "Seconds a connection may go without any bytes read or written before it\nis closed. Covers clients that connect and never send a request.",
+          "description": "Seconds a connection may go without any bytes read or written before it\nis closed (for example, a client that stops reading a response).",
           "format": "uint64",
           "maximum": 3600,
           "minimum": 1,

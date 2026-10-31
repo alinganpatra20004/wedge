@@ -477,13 +477,29 @@ async fn accept_loop(
         }
         let _ = stream.set_nodelay(true);
         let local = stream.local_addr().ok();
-        let stream = IdleTimeout::new(stream, Duration::from_secs(limits.idle_timeout_secs));
+        let idle = Duration::from_secs(limits.idle_timeout_secs);
         let shared = Arc::clone(&shared);
         let builder = Arc::clone(&builder);
         let budget = Duration::from_secs(limits.header_timeout_secs);
         // Taken now, so shutdown also waits for connections still handshaking.
         let watcher = graceful.watcher();
         tokio::spawn(async move {
+            // T2.5: a client must start its request (or TLS handshake, bounded
+            // below) within the request-head budget. hyper's header timer
+            // starts only with the first byte, so without this a silent
+            // connection held a slot until the idle timeout, and enough of
+            // them starved every other client. The idle timeout still applies
+            // if it is shorter.
+            if kind != Kind::Tls
+                && tokio::time::timeout(budget.min(idle), stream.readable())
+                    .await
+                    .is_err()
+            {
+                tracing::debug!(%peer, "no request within the header timeout");
+                drop(permit);
+                return;
+            }
+            let stream = IdleTimeout::new(stream, idle);
             let state = shared.load();
             // The admin listener is never captured: it carries the reload token.
             let capture = shared

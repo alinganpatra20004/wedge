@@ -83,8 +83,8 @@ Connection and request limits (`[server.limits]`). See the threat model, entries
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `h2_max_concurrent_streams` | integer (1 to 1000) | `100` | Maximum concurrent HTTP/2 streams per connection. |
-| `header_timeout_secs` | integer (1 to 300) | `10` | Seconds allowed to receive a complete request head, including the wait for the next request on a kept-alive connection. |
-| `idle_timeout_secs` | integer (1 to 3600) | `60` | Seconds a connection may go without any bytes read or written before it is closed. Covers clients that connect and never send a request. |
+| `header_timeout_secs` | integer (1 to 300) | `10` | Seconds allowed to receive a complete request head, including the wait for the first byte of a new connection and for the next request on a kept-alive connection. |
+| `idle_timeout_secs` | integer (1 to 3600) | `60` | Seconds a connection may go without any bytes read or written before it is closed (for example, a client that stops reading a response). |
 | `max_connections` | integer (1 to 1000000) | `1024` | Maximum simultaneous client connections across all listeners. |
 | `max_header_bytes` | integer (8192 to 1048576) | `16384` | Maximum bytes buffered for an HTTP/1 request head, and maximum HTTP/2 header list size. |
 | `max_headers` | integer (1 to 1000) | `100` | Maximum number of request headers. |
