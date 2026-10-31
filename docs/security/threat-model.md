@@ -143,6 +143,33 @@ settings and the debug capture flags need a restart.
 | T5.11 | Packet capture (`tcp_headers`) records other processes' traffic, or needs a privilege that widens the attack surface | I, E | A01, A05 | BPF filter limited to wedge's own listen ports; optional build feature; needs CAP_NET_RAW or admin, which the docs say to grant only for the debugging session; if capture cannot start, wedge continues without it | verified: live capture in a Debian 12 container (root, CAP_NET_RAW) recorded the full handshake, data and FIN exchange for one request with BPF filter `tcp and (port 8080)`, headers only (snaplen 128), not promiscuous; credential absent from the log; decoder tests (`decodes_each_link_type`, `decodes_ipv6_and_rejects_junk`, `spots_retransmissions`); without the feature, `tcp_headers` logs an error and wedge continues |
 | T5.12 | Capture log injection (control characters, fake log lines) | T | A09 / V7.3.1 | Captured bytes are written as hex plus escaped ASCII, never raw | verified (`hexdump_escapes_everything`; no control bytes in the capture file in `capture_records_each_layer_and_redacts_credentials`) |
 
+## Phase 6: Packaging and release
+
+New surfaces: the release pipeline, the artifacts users download, and the
+scripts and installers that run with root or Administrator rights.
+
+Design:
+- Linux binaries are cross-built in a container (gnu and static musl, x86_64
+  and aarch64). Windows builds natively; macOS builds on CI macOS runners.
+- Releases are built only by the GitHub release workflow, from a tag, with
+  `--locked`, after the security gate passes.
+- Every artifact is listed in `SHA256SUMS` and gets a GitHub build-provenance
+  attestation.
+- Packages (.deb, .rpm) come from one nfpm definition; the OCI image is
+  static on `scratch` and runs as non-root.
+
+| # | Threat | STRIDE | OWASP / ASVS | Mitigation | Status |
+|---|---|---|---|---|---|
+| T6.1 | Tampered download (compromised mirror, MITM, swapped asset) | T | A08 / V10.3.2 | Assets only on GitHub Releases over HTTPS; `SHA256SUMS` for every file; build-provenance attestation (`gh attestation verify`); install guides verify checksums first and never use `curl \| sh` | planned |
+| T6.2 | Compromised dependency or toolchain in the release build | T | A06, A08 / V14.2.1, V14.2.4 | Release blocked unless cargo-audit, cargo-deny and Semgrep pass; `--locked` builds from the committed `Cargo.lock`; dependency list embedded in the binary (`cargo auditable`); SBOM in Phase 7 | planned |
+| T6.3 | Package maintainer scripts (run as root) abused or buggy | E, T | A08 / V14.1.2 | Scripts only create the `wedge` system user and set ownership on fixed paths; no network, no `eval`, no user input; tested on each distro in Docker | planned |
+| T6.4 | Upgrade overwrites the admin's config, or ships an insecure default | T | A05 / V14.1.1 | Config files marked as config (`noreplace`); shipped example listens on loopback, admin listener off, capture off | planned |
+| T6.5 | Wrong file permissions after install (config or keys writable by the service account) | T, I | A05 / V14.1.3 | `/etc/wedge` root:wedge 0750, config files 0640; binary root-owned 0755; the systemd unit is read-only for the service (`ReadOnlyPaths`) | planned |
+| T6.6 | Container image with a shell, package manager or root user widens a compromise | E | A05 / V14.1.2 | Static musl binary on `scratch`, `USER 65532`; no shell; documented `--read-only --cap-drop ALL`; image scanned with Trivy in Phase 7 | planned |
+| T6.7 | Windows service binary planting or unquoted path | E | A05 | `wedge service install` refuses binaries outside Program Files and registers the plain, quoted path (fixed in Phase 6 prep); MSI installs to Program Files | partly verified (`program_files_check_ignores_prefix_and_case`) |
+| T6.8 | Build machine details leaked in binaries (user names, paths) | I | A05 | `--remap-path-prefix` for the cargo home and source directories; symbols stripped from release builds | planned |
+| T6.9 | Release secrets (tokens) exposed in CI | I | A02, A08 / V14.2 | Workflow uses only the built-in `GITHUB_TOKEN` with least privilege (`contents: write`, `id-token: write`, `attestations: write` on the release job only); no long-lived secrets | planned |
+
 ## Residual risks and assumptions
 
 - The OS, filesystem permissions and the operator's account are trusted. wedge
