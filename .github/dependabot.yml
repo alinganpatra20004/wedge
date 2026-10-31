@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+#
+# Workflow actions are pinned to commit SHAs (supply chain, OWASP A08);
+# Dependabot proposes updates so the pins do not go stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

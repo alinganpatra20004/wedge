@@ -19,9 +19,11 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-audit,cargo-deny
       - run: cargo audit
@@ -32,7 +34,7 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y pandoc
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -SkipWindows
@@ -45,7 +47,7 @@ jobs:
       - run: docker run --rm -v "$PWD:/src" -w /src rust:1-bookworm sh scripts/sbom.sh
       # The built artifacts, not just Cargo.lock: the binaries carry their
       # dependency list (cargo auditable). Any finding blocks the release.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-audit
       - run: cargo audit bin build/*-linux-*/wedge
@@ -56,7 +58,7 @@ jobs:
               --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 \
               --db-repository ghcr.io/aquasecurity/trivy-db:2
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: build/
@@ -65,8 +67,10 @@ jobs:
     needs: gate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
       - run: choco install pandoc -y --no-progress
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -SkipLinux
@@ -79,7 +83,7 @@ jobs:
         if: env.SIGNPATH_API_TOKEN != ''
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-unsigned
           path: |
@@ -88,7 +92,7 @@ jobs:
       - if: env.SIGNPATH_API_TOKEN != ''
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -101,7 +105,7 @@ jobs:
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         run: Copy-Item -Force build/signed/* build/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: build/
@@ -110,12 +114,14 @@ jobs:
     needs: gate
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
       - run: brew install pandoc
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -MacOS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
           path: build/
@@ -128,8 +134,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: build/
           merge-multiple: true
@@ -139,14 +145,14 @@ jobs:
       # Sigstore keyless signatures: each asset gets <file>.sigstore.json,
       # verifiable with `cosign verify-blob` against this workflow's identity.
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
       - if: startsWith(github.ref, 'refs/tags/v')
         run: |
           for f in $(find build -maxdepth 1 -type f ! -name '*.sigstore.json'); do
             cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
           done
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: |
             build/*.tar.gz
@@ -165,7 +171,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $files \
             --verify-tag --title "wedge $GITHUB_REF_NAME" --notes-file packaging/RELEASE_NOTES.md
       - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-dry-run
           path: build/

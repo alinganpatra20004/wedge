@@ -356,7 +356,11 @@ impl Pool {
         if self.health_path.is_some() {
             return false;
         }
-        let since = self.now_ms() - backend.last_failure_ms.load(Ordering::Relaxed);
+        // A concurrent failure() may store a time later than our now_ms();
+        // that counts as "just failed", not as a wrapped-around huge gap.
+        let since = self
+            .now_ms()
+            .saturating_sub(backend.last_failure_ms.load(Ordering::Relaxed));
         u128::from(since) >= self.health_interval.as_millis()
     }
 
@@ -370,7 +374,10 @@ impl Pool {
         backend
             .last_failure_ms
             .store(self.now_ms(), Ordering::Relaxed);
-        let failures = backend.failures.fetch_add(1, Ordering::Relaxed) + 1;
+        let failures = backend
+            .failures
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         if failures == self.unhealthy_after {
             tracing::warn!(upstream = %self.name, server = %backend.addr, "upstream server is down");
         }
@@ -597,5 +604,24 @@ mod tests {
         assert_eq!(limit("/api/v2/x"), Some(1));
         assert_eq!(limit("/apix"), Some(2), "falls through to /");
         assert_eq!(limit("/"), Some(2));
+    }
+
+    #[test]
+    fn a_failure_recorded_after_now_keeps_the_server_down() {
+        let config = wedge_config::from_str(
+            "[[upstream]]\nname = \"u\"\nservers = [\"127.0.0.1:9\"]\nhealth_interval_secs = 10\n",
+        )
+        .unwrap();
+        let proxy = Proxy::new(&config);
+        let pool = &proxy.pools[0];
+        let backend = &pool.backends[0];
+        backend
+            .failures
+            .store(pool.unhealthy_after, Ordering::Relaxed);
+        // As if a concurrent failure() stored its time after is_up read now_ms().
+        backend
+            .last_failure_ms
+            .store(pool.now_ms() + 5_000, Ordering::Relaxed);
+        assert!(!pool.is_up(backend));
     }
 }
