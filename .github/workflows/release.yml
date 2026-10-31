@@ -140,6 +140,8 @@ jobs:
             build/*.deb
             build/*.rpm
             build/*.tar
+            build/*.msi
+            build/SHA256SUMS
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}

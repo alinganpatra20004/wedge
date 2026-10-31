@@ -57,8 +57,11 @@ do not remove it.
 
 ## Verifying downloads
 
-Every release asset is listed in `SHA256SUMS`, has a GitHub build
-provenance attestation and a Sigstore signature (`<file>.sigstore.json`):
+Every release asset has a Sigstore signature (`<file>.sigstore.json`) and,
+except the public key `wedge-release.asc`, is listed in `SHA256SUMS` and
+has a GitHub build provenance attestation. (In v0.1.0 the MSI and
+`SHA256SUMS` have no attestation; use the checksum and Sigstore signature
+for them.)
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS

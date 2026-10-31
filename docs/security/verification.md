@@ -121,3 +121,19 @@ uid 65532); while it was not, wedge refused to start with a clear error.
 POST with a body on a static route is 413 by design (T2.7, static routes
 take no body); a 16 KiB URI exceeds the 16 KiB header buffer and gets 431
 before the 8 KiB URI limit (414) applies.
+
+## Phase 6 gate: v0.1.0 release (tag at 0f1f4d0, 2026-10-31)
+
+Release workflow run 41205035560: gate, linux, windows (MSI built, installed,
+service started, page served, uninstalled on a GitHub Windows runner), macos
+and publish all passed. 16 assets plus 16 Sigstore bundles were published.
+
+| Check, on the downloaded release | Tool | Result |
+|---|---|---|
+| Checksums | GNU `sha256sum --ignore-missing -c SHA256SUMS` | 14 of 14 downloadable files OK (the 7 bare-binary lines are for unpacked archives) |
+| Sigstore signatures | cosign 2.4.1 `verify-blob`, identity `https://github.com/alinganpatra20004/wedge/`, GitHub OIDC issuer | 16 of 16 verified |
+| Build provenance | `gh attestation verify` | 13 of 16 verified; the MSI and `SHA256SUMS` were not in the attested list (fixed in `release.yml` for the next release; SECURITY.md says so); `wedge-release.asc` is the committed key, not a build output |
+| RPM signatures | `rpm -K` on Fedora 40 after importing `wedge-release.asc` | both packages: digests signatures OK |
+| DEB signatures | `gpg --verify _gpgorigin` over the package members, Debian 12 | both packages: good signature, key B84A920DB6B511E646B124FD983EF3CDD108E023 |
+| Reproducibility | SHA-256 of the dry-run and release builds | the x86_64 musl binary is byte-identical in dry run 41193421743 and the release |
+| Published container image | the 45-check smoke test above | 45/45 pass |
