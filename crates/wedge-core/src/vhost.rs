@@ -92,18 +92,23 @@ pub(crate) fn request_host(uri: &Uri, headers: &HeaderMap) -> Option<String> {
     if values.next().is_some() {
         return None;
     }
-    let raw = match (uri.authority(), header) {
-        (Some(authority), _) => authority.host().to_owned(),
-        (None, Some(value)) => {
-            let authority: hyper::http::uri::Authority = value.to_str().ok()?.parse().ok()?;
-            if authority.as_str().contains('@') {
-                return None;
-            }
-            authority.host().to_owned()
-        }
+    let authority = match (uri.authority(), header) {
+        (Some(authority), _) => authority.clone(),
+        (None, Some(value)) => value.to_str().ok()?.parse().ok()?,
         (None, None) => return None,
     };
-    let host = raw.trim_end_matches('.').to_ascii_lowercase();
+    // RFC 9110 4.2.4 and 7.2: userinfo is an error, and a Host with an
+    // invalid value (such as a port above 65535) gets 400.
+    // (Authority::port() is None for an unparsable port, so check the text;
+    // a ']' after the last ':' means it is inside an IPv6 literal.)
+    let port_ok = match authority.as_str().rsplit_once(':') {
+        Some((_, port)) if !port.contains(']') => port.is_empty() || port.parse::<u16>().is_ok(),
+        _ => true,
+    };
+    if authority.as_str().contains('@') || !port_ok {
+        return None;
+    }
+    let host = authority.host().trim_end_matches('.').to_ascii_lowercase();
     let valid = !host.is_empty()
         && host
             .bytes()
@@ -161,6 +166,20 @@ mod tests {
         );
         assert_eq!(host(&r, "user@example.com"), Route::BadHost);
         assert_eq!(host(&r, "exa mple.com"), Route::BadHost);
+        assert_eq!(host(&r, "example.com:99999"), Route::BadHost);
+        assert_eq!(host(&r, "example.com:8080"), Route::Vhost(0));
+        assert_eq!(
+            host(&r, "example.com:"),
+            Route::Vhost(0),
+            "empty port is allowed"
+        );
+        assert_eq!(host(&r, "[::1]"), Route::Vhost(0), "default vhost");
+        assert_eq!(host(&r, "[::1]:8080"), Route::Vhost(0), "default vhost");
+        assert_eq!(host(&r, "[::1]:99999"), Route::BadHost);
+        for target in ["http://example.com:99999/", "http://user@example.com/"] {
+            let uri: Uri = target.parse().unwrap();
+            assert_eq!(r.route(&uri, &HeaderMap::new()), Route::BadHost, "{target}");
+        }
         let mut two = HeaderMap::new();
         two.append(HOST, HeaderValue::from_static("example.com"));
         two.append(HOST, HeaderValue::from_static("evil.test"));

@@ -18,7 +18,7 @@ Control them with environment variables:
 
 | Variable | Effect |
 |---|---|
-| `RUST_LOG=info` | default level |
+| `RUST_LOG=info,rustls=error` | the default (TLS library warnings about client mistakes are hidden; a client could otherwise add one per connection) |
 | `RUST_LOG=info,wedge::access=off` | error log only |
 | `RUST_LOG=warn,wedge::access=info` | access log plus warnings |
 | `RUST_LOG=debug` | detailed, including TLS handshake failures |

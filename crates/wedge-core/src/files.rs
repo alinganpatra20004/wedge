@@ -70,6 +70,10 @@ pub(crate) async fn serve(
             // No directory listings (T2.3).
             _ => return response::status(StatusCode::NOT_FOUND),
         }
+    } else if safe.trailing_slash {
+        // "/page.html/" names a directory. Serving the file there would shift
+        // the base of its relative URLs (path-relative style sheet import).
+        return response::status(StatusCode::NOT_FOUND);
     }
     if !meta.is_file() {
         return response::status(StatusCode::NOT_FOUND);

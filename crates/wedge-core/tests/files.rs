@@ -172,6 +172,11 @@ async fn directories_redirect_and_never_list() {
     }
     assert_eq!(body(&get(&s, "/docs/", "").await), "docs");
     assert_eq!(status(&get(&s, "/empty-dir/", "").await), 404);
+    // A file named as a directory would shift the base of its relative URLs.
+    for target in ["/index.html/", "/docs/index.html/"] {
+        let reply = get(&s, target, "").await;
+        assert_eq!(status(&reply), 404, "{target}: {reply}");
+    }
 }
 
 #[tokio::test]

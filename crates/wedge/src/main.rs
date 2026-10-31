@@ -279,12 +279,15 @@ fn reload(config_path: &std::path::Path) -> ExitCode {
 }
 
 /// Logs to stderr, or appends to `file` (used by the Windows service, which
-/// has no console). Filter with RUST_LOG (default info); JSON output with
-/// WEDGE_LOG_FORMAT=json. Access lines use target `wedge::access`, so
-/// `RUST_LOG=info,wedge::access=off` keeps only the error log.
+/// has no console). Filter with RUST_LOG (default `info,rustls=error`); JSON
+/// output with WEDGE_LOG_FORMAT=json. Access lines use target `wedge::access`,
+/// so `RUST_LOG=info,wedge::access=off` keeps only the error log.
 fn init_logging(file: Option<&std::path::Path>) -> Result<(), String> {
+    // rustls warns about client mistakes (such as an IP address sent as SNI)
+    // on every handshake; any client could fill the log with them. wedge logs
+    // handshake failures itself at debug level and counts them in metrics.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rustls=error"));
     let json = std::env::var("WEDGE_LOG_FORMAT").is_ok_and(|v| v == "json");
     let builder = tracing_subscriber::fmt().with_env_filter(filter);
     match file {
