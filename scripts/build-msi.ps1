@@ -29,11 +29,14 @@ $escaped = (Get-Content LICENSE -Raw).Replace('\', '\\').Replace('{', '\{').Repl
 [IO.File]::WriteAllText((Join-Path $PWD $rtf), "{\rtf1\ansi\deff0{\fonttbl{\f0 Consolas;}}\fs16 $escaped}")
 
 $msi = "build/wedge-$version-x86_64.msi"
+# Absolute paths: WiX resolves <Files> globs relative to the .wxs file.
+function Get-Full([string]$path) { (Resolve-Path $path).Path }
 wix build packaging/windows/wedge.wxs -arch x64 `
     -ext WixToolset.UI.wixext `
-    -d "Version=$version" -d "BuildDir=$layout" `
-    -d "BrandDir=packaging/branding/generated" -d "LicenseRtf=$rtf" `
-    -d "ConfigFile=packaging/windows/wedge.toml" -d "TestPage=packaging/linux/www/index.html" `
+    -d "Version=$version" -d "BuildDir=$(Get-Full $layout)" `
+    -d "BrandDir=$(Get-Full packaging/branding/generated)" -d "LicenseRtf=$(Get-Full $rtf)" `
+    -d "ConfigFile=$(Get-Full packaging/windows/wedge.toml)" `
+    -d "TestPage=$(Get-Full packaging/linux/www/index.html)" `
     -o $msi
 if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
 Remove-Item $rtf

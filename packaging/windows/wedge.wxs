@@ -28,7 +28,6 @@
     <Property Id="ARPPRODUCTICON" Value="wedge.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/alinganpatra20004/wedge" />
     <Property Id="ARPHELPLINK" Value="https://github.com/alinganpatra20004/wedge/blob/main/docs/guide/README.md" />
-    <Property Id="ARPNOMODIFY" Value="1" />
 
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <WixVariable Id="WixUIBannerBmp" Value="$(var.BrandDir)\msi-banner.bmp" />
