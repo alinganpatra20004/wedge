@@ -49,3 +49,24 @@ Findings:
 Also observed: the startup warning for a group- or world-readable key file
 fires (T3.2), and an unreadable key file stops startup with an error that
 names the reference only.
+
+## Phase 4 gate (commit 7a08f06, 2026-10-31)
+
+| Check | Tool | Result |
+|---|---|---|
+| Lints and tests | rustfmt, clippy `-D warnings`, `cargo test` (12 proxy wire tests with real upstreams) | pass on Linux, Windows, macOS; MSRV 1.80 `cargo check` passes |
+| Known vulnerabilities | cargo-audit 0.22.2, cargo-deny 0.20.2 | no advisories |
+| Static analysis | Semgrep 1.182.1 | 1 finding (`expect()` in the new fuzz helper, project rule `wedge-no-unwrap-in-lib`), fixed; then no findings |
+| Fuzzing, 300 s per target, Docker `rust:1-bookworm`, nightly | cargo-fuzz | no crashes: `config_parse` 319,558 runs, `proxy_request` 1,088,832 (new), `request_path` 1,683,567, `secret_ref` 42,965,013 |
+| Threat model | T4.1 to T4.13 | all verified by named tests |
+
+Defects found by the new tests during Phase 4 and fixed before the gate:
+
+- A malformed chunked request body was reported as 502 (upstream error);
+  it is the client's error and now gives 400 (`smuggled_requests_never_reach_the_upstream`).
+- A request still carrying both Content-Length and Transfer-Encoding on a
+  proxy route is now refused with 400 (T4.4).
+- Two listeners on port 0 were rejected as duplicates by config validation.
+
+Known limitations (documented, not defects): no TLS to upstreams, no
+WebSocket/`Upgrade` tunnelling, HTTP/1.1 only to upstreams.
