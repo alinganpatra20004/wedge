@@ -73,10 +73,10 @@ The OCI image contains only the static binary, a default configuration and a
 test page, and runs as user 65532:
 
 ```sh
-docker load -i wedge-0.1.0-oci-amd64.tar
+docker load -i wedge-0.1.1-oci-amd64.tar
 docker run -d --name wedge --read-only --cap-drop ALL \
   --security-opt no-new-privileges -p 8080:8080 \
-  -v /srv/site:/srv/www:ro -v /etc/wedge:/etc/wedge:ro wedge:0.1.0
+  -v /srv/site:/srv/www:ro -v /etc/wedge:/etc/wedge:ro wedge:0.1.1
 ```
 
 Inside the container wedge listens on `0.0.0.0:8080`; choose the exposure

@@ -11,19 +11,19 @@
 In PowerShell:
 
 ```powershell
-$BASE = "https://github.com/alinganpatra20004/wedge/releases/download/v0.1.0"
-Invoke-WebRequest "$BASE/wedge-0.1.0-x86_64.msi" -OutFile wedge-0.1.0-x86_64.msi
+$BASE = "https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1"
+Invoke-WebRequest "$BASE/wedge-0.1.1-x86_64.msi" -OutFile wedge-0.1.1-x86_64.msi
 Invoke-WebRequest "$BASE/SHA256SUMS" -OutFile SHA256SUMS
-$expected = (Select-String SHA256SUMS -Pattern ' wedge-0.1.0-x86_64.msi$').Line.Split(' ')[0]
-if ((Get-FileHash wedge-0.1.0-x86_64.msi -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'checksum mismatch' }
+$expected = (Select-String SHA256SUMS -Pattern ' wedge-0.1.1-x86_64.msi$').Line.Split(' ')[0]
+if ((Get-FileHash wedge-0.1.1-x86_64.msi -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'checksum mismatch' }
 ```
 
 ## 2. Install
 
-Double-click `wedge-0.1.0-x86_64.msi`, or from an elevated PowerShell (`/qn` for a silent install):
+Double-click `wedge-0.1.1-x86_64.msi`, or from an elevated PowerShell (`/qn` for a silent install):
 
 ```powershell
-msiexec /i wedge-0.1.0-x86_64.msi
+msiexec /i wedge-0.1.1-x86_64.msi
 ```
 
 The installer:
@@ -57,12 +57,12 @@ port in Windows Defender Firewall.
 
 ## Remove
 
-Settings > Apps > wEdge > Uninstall, or `msiexec /x wedge-0.1.0-x86_64.msi`. The configuration in
+Settings > Apps > wEdge > Uninstall, or `msiexec /x wedge-0.1.1-x86_64.msi`. The configuration in
 `C:\ProgramData\wedge` is kept.
 
 ## Portable zip (no installer)
 
-`wedge-0.1.0-x86_64-pc-windows-msvc.zip` contains the same files. Copy
+`wedge-0.1.1-x86_64-pc-windows-msvc.zip` contains the same files. Copy
 `wedge.exe` to `C:\Program Files\wedge\` (the service refuses other locations),
 then from an elevated PowerShell:
 

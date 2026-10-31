@@ -45,7 +45,8 @@ function New-TestScript($p) {
         # may lack su), then run the service the way its unit would.
         'command -v setpriv >/dev/null || command -v su >/dev/null || dnf install -y -q util-linux >/dev/null 2>&1 || true',
         'if command -v su >/dev/null; then su -s /bin/sh wedge -c "exec $(command -v wedge) run -c /etc/wedge/wedge.toml" 2>/tmp/wedge.err & else setpriv --reuid=wedge --regid=wedge --clear-groups "$(command -v wedge)" run -c /etc/wedge/wedge.toml 2>/tmp/wedge.err & fi',
-        'sleep 1',
+        # Wait for wedge to listen (a fixed 1 s sleep was flaky under load).
+        'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do curl -fsS http://127.0.0.1:8080/ 2>/dev/null | grep -qi "<h1>" && break; sleep 0.5; done',
         'curl -fsS http://127.0.0.1:8080/ | grep -qi "<h1>" || { cat /tmp/wedge.err; exit 1; }',
         'kill %1 2>/dev/null || pkill wedge || true',
         'echo "serves its default page as the wedge user"'

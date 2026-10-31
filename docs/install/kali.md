@@ -4,7 +4,7 @@
 
 # Install wedge on Kali Linux (rolling)
 
-> Tested on 2026-10-31 with wedge 0.1.0 in a clean `kalilinux/kali-rolling` container (kalilinux/kali-rolling@sha256:ea20024e16833dab1a5337f5998602f3b81f8a38f3b0995dda272c83a1b0c1b9) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
+> Tested on 2026-10-31 with wedge 0.1.1 in a clean `kalilinux/kali-rolling` container (kalilinux/kali-rolling@sha256:ea20024e16833dab1a5337f5998602f3b81f8a38f3b0995dda272c83a1b0c1b9) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
 
 ## 1. Prerequisites
 
@@ -18,7 +18,7 @@ Download the package and the checksum list from the GitHub release, and check th
 package before installing it. Never pipe a download straight into a shell.
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 BASE=https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION
 curl -fLO "$BASE/wedge_${VERSION}-1_amd64.deb"
 curl -fLO "$BASE/SHA256SUMS"

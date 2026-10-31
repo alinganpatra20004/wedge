@@ -4,7 +4,7 @@
 
 # Install wedge on Ubuntu 24.04 LTS
 
-> Tested on 2026-10-31 with wedge 0.1.0 in a clean `ubuntu:24.04` container (ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
+> Tested on 2026-10-31 with wedge 0.1.1 in a clean `ubuntu:24.04` container (ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
 
 ## 1. Prerequisites
 
@@ -18,7 +18,7 @@ Download the package and the checksum list from the GitHub release, and check th
 package before installing it. Never pipe a download straight into a shell.
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 BASE=https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION
 curl -fLO "$BASE/wedge_${VERSION}-1_amd64.deb"
 curl -fLO "$BASE/SHA256SUMS"

@@ -137,3 +137,20 @@ and publish all passed. 16 assets plus 16 Sigstore bundles were published.
 | DEB signatures | `gpg --verify _gpgorigin` over the package members, Debian 12 | both packages: good signature, key B84A920DB6B511E646B124FD983EF3CDD108E023 |
 | Reproducibility | SHA-256 of the dry-run and release builds | the x86_64 musl binary is byte-identical in dry run 41193421743 and the release |
 | Published container image | the 45-check smoke test above | 45/45 pass |
+
+## v0.1.1 security release (tag at 1761880, 2026-10-31)
+
+Release workflow run 41226872190: gate (now with the artifact scans),
+linux, windows (MSI install test), macos and publish all passed.
+17 assets plus 17 Sigstore bundles were published.
+
+| Check, on the downloaded release | Tool | Result |
+|---|---|---|
+| Checksums | GNU `sha256sum --ignore-missing -c SHA256SUMS` | 15 of 15 files OK |
+| Sigstore signatures | cosign 2.4.1 `verify-blob` | 17 of 17 verified |
+| Build provenance | `gh attestation verify` | 16 of 16 verified, now including the MSI, the SBOM and `SHA256SUMS` (F-03) |
+| Package signatures | `rpm -K` (Fedora 40), `gpg --verify _gpgorigin` (Debian 12) | both RPMs and both DEBs good, key B84A920DB6B511E646B124FD983EF3CDD108E023 |
+| Dependencies in the binary | cargo-audit 0.22.2 `audit bin` on the unpacked musl binary | 167 dependencies found, no advisories |
+| Container image | Trivy 0.56.2 | Rust binary detected, 152 packages, 0 vulnerabilities |
+| Install guides | `scripts/test-install.ps1` against the release URL | Debian 12, Ubuntu 24.04, Kali, Fedora 40, Rocky 9, Alpine 3.20: all pass. The harness's fixed 1 s wait for wedge was flaky once on Rocky 9 under load; it now polls for up to 10 s |
+| Published image | smoke (45 checks), traversal (104 payloads), robustness (13 attacks) | 45/45, 104/104, 13/13 |

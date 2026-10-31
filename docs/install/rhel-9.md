@@ -4,7 +4,7 @@
 
 # Install wedge on RHEL 9 and compatible (Rocky Linux, AlmaLinux)
 
-> Tested on 2026-10-31 with wedge 0.1.0 in a clean `rockylinux:9` container (rockylinux@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
+> Tested on 2026-10-31 with wedge 0.1.1 in a clean `rockylinux:9` container (rockylinux@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6) by `scripts/test-install.ps1`. The service-manager step is not run there (containers have no init system); wedge runs as the `wedge` user instead.
 
 ## 1. Prerequisites
 
@@ -18,7 +18,7 @@ Download the package and the checksum list from the GitHub release, and check th
 package before installing it. Never pipe a download straight into a shell.
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 BASE=https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION
 curl -fLO "$BASE/wedge-${VERSION}-1.x86_64.rpm"
 curl -fLO "$BASE/SHA256SUMS"
