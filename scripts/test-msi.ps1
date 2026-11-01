@@ -41,6 +41,9 @@ function Invoke-Msi([string]$name, [string]$arguments) {
         $lines = (Read-Log $log) -split "`r?`n"
         $failed = ($lines | Select-String -Pattern 'Return value 3' | Select-Object -First 1).LineNumber
         if ($failed) { $lines[[Math]::Max(0, $failed - 30)..$failed] }
+        $lines | Select-String -Pattern 'Error \d{4}|error code|returned actual error|Note: 1: \d{4}' |
+            Select-Object -First 20 | ForEach-Object { "  log: $_" }
+        $lines | Select-Object -Last 25 | ForEach-Object { "  end: $_" }
         Fail "$name exit code $($p.ExitCode)"
     }
     $log
