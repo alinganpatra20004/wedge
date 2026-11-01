@@ -19,7 +19,8 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
     dotnet tool install --global wix --version $wixVersion
     $env:PATH += [IO.Path]::PathSeparator + (Join-Path $HOME '.dotnet/tools')
 }
-foreach ($ext in @('WixToolset.UI.wixext')) {
+$extensions = @('WixToolset.UI.wixext', 'WixToolset.Util.wixext', 'WixToolset.Firewall.wixext')
+foreach ($ext in $extensions) {
     wix extension add -g "$ext/$wixVersion" | Out-Null
 }
 
@@ -31,12 +32,11 @@ $escaped = (Get-Content LICENSE -Raw).Replace('\', '\\').Replace('{', '\{').Repl
 $msi = "build/wedge-$version-x86_64.msi"
 # Absolute paths: WiX resolves <Files> globs relative to the .wxs file.
 function Get-Full([string]$path) { (Resolve-Path $path).Path }
-wix build packaging/windows/wedge.wxs -arch x64 `
-    -ext WixToolset.UI.wixext `
+$extArgs = $extensions | ForEach-Object { '-ext', $_ }
+wix build packaging/windows/wedge.wxs -arch x64 @extArgs `
     -d "Version=$version" -d "BuildDir=$(Get-Full $layout)" `
     -d "BrandDir=$(Get-Full packaging/branding/generated)" -d "LicenseRtf=$(Get-Full $rtf)" `
-    -d "ConfigFile=$(Get-Full packaging/windows/wedge.toml)" `
-    -d "TestPage=$(Get-Full packaging/linux/www/index.html)" `
+    -d "ControlScript=$(Get-Full packaging/windows/wedge-control.cmd)" `
     -o $msi
 if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
 # The .wixpdb is WiX debug data, not something to ship.

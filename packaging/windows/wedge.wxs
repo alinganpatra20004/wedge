@@ -2,18 +2,30 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) Alingan Patra -->
 <!--
-  wEdge Windows installer (WiX 5). Built by scripts/build-msi.ps1.
+  wEdge Windows installer (WiX 5). Built by scripts/build-msi.ps1, tested by
+  scripts/test-msi.ps1. The user guide's install page describes every dialog
+  and the silent-install properties.
 
-  - Installs wedge.exe and the docs to Program Files\wedge (fixed location:
-    the service refuses binaries elsewhere, threat model T6.7).
-  - Puts a default configuration and test page in ProgramData\wedge; they are
-    kept on upgrade and uninstall (they are the administrator's files).
-  - Registers and starts the "wedge" service through `wedge service install`,
-    which runs it as NT SERVICE\wedge and restricts folder permissions
-    (T5.7, T5.8); uninstall removes the service the same way.
+  - Asks for the install folder, the web application folder, the
+    configuration folder, the web and admin ports, and an administrator
+    account; or, when an older wEdge is installed, whether to upgrade it
+    (keep everything) or uninstall it and install fresh (optionally deleting
+    its configuration and content).
+  - Locks the install and configuration folders to Administrators and SYSTEM
+    (users may read), so nobody else can replace wedge.exe or change the
+    configuration (threat model T6.7, T5.8).
+  - Writes the configuration with `wedge init`, the admin account with
+    `wedge admin set-password` (only an Argon2id hash is stored), and
+    registers the service with `wedge service install`, which runs it as
+    NT SERVICE\wedge and checks the folder permissions again.
+  - Adds Start menu and install-folder shortcuts to start, stop, restart and
+    check the service, edit the configuration, open the admin page, the web
+    folder and the logs, and uninstall.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
   <Package Name="wEdge"
            Manufacturer="Alingan Patra"
            Version="$(var.Version)"
@@ -28,30 +40,121 @@
     <Property Id="ARPPRODUCTICON" Value="wedge.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/alinganpatra20004/wedge" />
     <Property Id="ARPHELPLINK" Value="https://github.com/alinganpatra20004/wedge/blob/main/docs/guide/README.md" />
+    <!-- Settings are chosen at install time; "Change" would not apply them. -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Choices, with their defaults. All can be given on the msiexec
+         command line for a silent install. -->
+    <Property Id="HTTPPORT" Value="8080" Secure="yes" />
+    <Property Id="ADMINPORT" Value="9090" Secure="yes" />
+    <Property Id="ADMINUSER" Value="admin" Secure="yes" />
+    <Property Id="ADMINPASSWORD" Hidden="yes" Secure="yes" />
+    <Property Id="ADMINPASSWORD2" Hidden="yes" />
+    <Property Id="PUBLICACCESS" Secure="yes" />
+    <!-- With an older version installed: "upgrade" keeps its settings,
+         "fresh" uninstalls it and asks for everything again. -->
+    <Property Id="UPGRADEMODE" Value="upgrade" Secure="yes" />
+    <Property Id="PURGEOLD" Secure="yes" />
+    <Property Id="QUOTECHAR" Value="&quot;" />
+    <Property Id="BACKSLASH" Value="\" />
+
+    <!-- What an earlier 0.2+ installation recorded. -->
+    <Property Id="OLD_INSTALLDIR" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="InstallDir" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_CONFIGFOLDER" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="ConfigFolder" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_WEBROOT" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="WebRoot" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_LOGDIR" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="LogDir" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_HTTPPORT" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="HttpPort" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_ADMINPORT" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="AdminPort" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="OLD_PUBLIC" Secure="yes">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\wedge" Name="Public" Type="raw" Bitness="always64" />
+    </Property>
+
+    <!-- The 0.1 installer recorded nothing: its locations were fixed. -->
+    <SetProperty Id="OLD_INSTALLDIR" Value="[ProgramFiles64Folder]wedge\" After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND NOT OLD_INSTALLDIR" />
+    <SetProperty Id="OLD_CONFIGFOLDER" Value="[CommonAppDataFolder]wedge\" After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND NOT OLD_CONFIGFOLDER" />
+    <SetProperty Id="OLD_WEBROOT" Value="[CommonAppDataFolder]wedge\www\" After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND NOT OLD_WEBROOT" />
+    <SetProperty Id="PURGE_LOGDIR" Action="SetPurgeLogDirRecorded" Value="[OLD_LOGDIR]" After="AppSearch" Sequence="both"
+                 Condition="OLD_LOGDIR" />
+    <SetProperty Id="PURGE_LOGDIR" Action="SetPurgeLogDirLegacy" Value="[CommonAppDataFolder]wedge\logs\" After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND NOT OLD_LOGDIR" />
+    <!-- Upgrade: keep the previous ports and network choice. -->
+    <SetProperty Id="HTTPPORT" Value="[OLD_HTTPPORT]" After="AppSearch" Sequence="both"
+                 Condition='OLD_HTTPPORT AND UPGRADEMODE="upgrade"' />
+    <SetProperty Id="ADMINPORT" Value="[OLD_ADMINPORT]" After="AppSearch" Sequence="both"
+                 Condition='OLD_ADMINPORT AND UPGRADEMODE="upgrade"' />
+    <SetProperty Id="PUBLICACCESS" Value="[OLD_PUBLIC]" After="AppSearch" Sequence="both"
+                 Condition='OLD_PUBLIC AND UPGRADEMODE="upgrade"' />
+    <!-- Upgrade: install where the previous version was, keep its folders. -->
+    <SetDirectory Id="INSTALLFOLDER" Value="[OLD_INSTALLDIR]" Sequence="both"
+                  Condition='WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade"' />
+    <SetDirectory Id="CONFIGFOLDER" Value="[OLD_CONFIGFOLDER]" Sequence="both"
+                  Condition='WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade"' />
+    <SetDirectory Id="WEBROOT" Value="[OLD_WEBROOT]" Sequence="both"
+                  Condition='WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade"' />
+    <SetDirectory Id="LOGFOLDER" Value="[OLD_LOGDIR]" Sequence="both"
+                  Condition='WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade" AND OLD_LOGDIR' />
+
+    <!-- Component conditions are evaluated in CostFinalize, so these are
+         set before it. -->
+    <SetProperty Id="ADMINENABLED" Value="1" Before="CostFinalize" Sequence="execute"
+                 Condition='(ADMINPASSWORD AND NOT (WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade")) OR (OLD_ADMINPORT AND WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade")' />
+    <SetProperty Id="FRESHINSTALL" Value="1" Before="InstallInitialize" Sequence="execute"
+                 Condition='NOT Installed AND NOT REMOVE AND NOT (WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade")' />
+    <SetProperty Id="PUBLICARG" Value="--public" Before="InstallInitialize" Sequence="execute"
+                 Condition='PUBLICACCESS="1"' />
 
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <WixVariable Id="WixUIBannerBmp" Value="$(var.BrandDir)\msi-banner.bmp" />
     <WixVariable Id="WixUIDialogBmp" Value="$(var.BrandDir)\msi-dialog.bmp" />
-    <ui:WixUI Id="WixUI_Minimal" />
+    <UIRef Id="WedgeUI" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="wedge">
         <Directory Id="DocsFolder" Name="docs" />
         <Directory Id="ExamplesFolder" Name="examples" />
+        <Directory Id="CONFIGFOLDER" Name="conf">
+          <Directory Id="CONFDFOLDER" Name="conf.d" />
+        </Directory>
+        <Directory Id="WEBROOT" Name="www" />
+        <Directory Id="LOGFOLDER" Name="logs" />
       </Directory>
     </StandardDirectory>
-    <StandardDirectory Id="CommonAppDataFolder">
-      <Directory Id="DataFolder" Name="wedge">
-        <Directory Id="WwwFolder" Name="www" />
-        <Directory Id="ConfDFolder" Name="conf.d" />
-      </Directory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuFolder" Name="wEdge" />
     </StandardDirectory>
 
+    <!-- Administrators and SYSTEM: full control; users: read and run.
+         Protected, so nothing is inherited from the parent folder. -->
+    <?define LockedSddl = "O:BAG:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)" ?>
+
     <Feature Id="Main" Title="wEdge" Level="1">
+      <Component Id="InstallFolderLock" Directory="INSTALLFOLDER" Guid="39251636-B26C-4480-81F3-D130C3A5C174">
+        <CreateFolder>
+          <PermissionEx Sddl="$(var.LockedSddl)" />
+        </CreateFolder>
+      </Component>
       <Component Directory="INSTALLFOLDER">
         <File Id="WedgeExe" Source="$(var.BuildDir)\wedge.exe" KeyPath="yes" />
         <!-- `wedge` works from any terminal. -->
         <Environment Id="Path" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Id="ControlScript" Source="$(var.ControlScript)" Name="wedge-control.cmd" KeyPath="yes" />
       </Component>
       <!-- One file per component, so each gets a stable automatic GUID. -->
       <Component Directory="INSTALLFOLDER">
@@ -66,33 +169,341 @@
       <Files Include="$(var.BuildDir)\docs\**" Directory="DocsFolder" />
       <Files Include="$(var.BuildDir)\examples\**" Directory="ExamplesFolder" />
 
-      <!-- The administrator's configuration: never overwritten, never removed. -->
-      <Component Directory="DataFolder" NeverOverwrite="yes" Permanent="yes">
-        <File Id="Config" Source="$(var.ConfigFile)" Name="wedge.toml" />
+      <!-- Folders only; `wedge init` writes their content, and uninstall
+           keeps whatever is in them. -->
+      <Component Id="ConfigFolderLock" Directory="CONFIGFOLDER" Guid="BC48C379-2204-45CA-B32F-892E875A586A">
+        <CreateFolder>
+          <PermissionEx Sddl="$(var.LockedSddl)" />
+        </CreateFolder>
       </Component>
-      <Component Directory="WwwFolder" NeverOverwrite="yes" Permanent="yes">
-        <File Id="TestPage" Source="$(var.TestPage)" Name="index.html" />
-      </Component>
-      <!-- An empty folder has no key file, so it needs a fixed id and GUID. -->
-      <Component Id="ConfDFolder" Directory="ConfDFolder" Guid="BD3532F6-A852-4AD1-9676-1FD0BC1E3316" Permanent="yes">
+      <Component Id="ConfDFolder" Directory="CONFDFOLDER" Guid="D7EBCB44-EED1-4FA3-BB82-587F881BE7DA">
         <CreateFolder />
+      </Component>
+      <Component Id="WebRootFolder" Directory="WEBROOT" Guid="C8EFC46C-0A80-40CA-9528-C2EE181DA0FF">
+        <CreateFolder />
+      </Component>
+      <Component Id="LogFolder" Directory="LOGFOLDER" Guid="3F70DC7B-969C-4B6B-B50D-F0A5226B071C">
+        <CreateFolder />
+      </Component>
+
+      <!-- Where things are, for upgrades and wedge-control.cmd. -->
+      <Component Id="Settings" Directory="INSTALLFOLDER">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\wedge">
+          <RegistryValue Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+          <RegistryValue Name="ConfigFolder" Value="[CONFIGFOLDER]" Type="string" />
+          <RegistryValue Name="ConfigFile" Value="[CONFIGFOLDER]wedge.toml" Type="string" />
+          <RegistryValue Name="WebRoot" Value="[WEBROOT]" Type="string" />
+          <RegistryValue Name="LogDir" Value="[LOGFOLDER]" Type="string" />
+          <RegistryValue Name="HttpPort" Value="[HTTPPORT]" Type="string" />
+        </RegistryKey>
+      </Component>
+      <Component Id="AdminSettings" Directory="INSTALLFOLDER" Condition="ADMINENABLED">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\wedge" Name="AdminPort" Value="[ADMINPORT]" Type="string" KeyPath="yes" />
+        <util:InternetShortcut Id="FolderAdminPage" Directory="INSTALLFOLDER" Name="wEdge admin page"
+                               Target="http://127.0.0.1:[ADMINPORT]/" />
+        <util:InternetShortcut Id="MenuAdminPage" Directory="StartMenuFolder" Name="wEdge admin page"
+                               Target="http://127.0.0.1:[ADMINPORT]/" />
+      </Component>
+      <!-- "Allow other computers": open the web port in Windows Firewall. -->
+      <Component Id="PublicAccess" Directory="INSTALLFOLDER" Condition='PUBLICACCESS="1"'>
+        <RegistryValue Root="HKLM" Key="SOFTWARE\wedge" Name="Public" Value="1" Type="string" KeyPath="yes" />
+        <fw:FirewallException Id="WebPort" Name="wEdge web server" Port="[HTTPPORT]" Protocol="tcp"
+                              Scope="any" Profile="all" />
+      </Component>
+
+      <!-- Service control and folders, in the install folder and the Start
+           menu. The control script asks for administrator rights itself. -->
+      <Component Id="FolderShortcuts" Directory="INSTALLFOLDER">
+        <Shortcut Id="FolderStart" Name="Start wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="start"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Start the wEdge service" />
+        <Shortcut Id="FolderStop" Name="Stop wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="stop"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Stop the wEdge service" />
+        <Shortcut Id="FolderRestart" Name="Restart wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="restart"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Restart the wEdge service" />
+        <Shortcut Id="FolderStatus" Name="wEdge status" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="status"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Show whether the wEdge service is running" />
+        <Shortcut Id="FolderEdit" Name="Edit wEdge configuration" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="edit"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Edit, check and apply the configuration" />
+        <Shortcut Id="FolderConfig" Name="Configuration folder" Target="[CONFIGFOLDER]" />
+        <Shortcut Id="FolderUninstall" Name="Uninstall wEdge" Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]"
+                  Icon="wedge.ico" Description="Remove wEdge (configuration and web content are kept)" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\wedge\Shortcuts" Name="InstallFolder" Value="1" Type="integer" KeyPath="yes" />
+      </Component>
+      <Component Id="MenuShortcuts" Directory="StartMenuFolder">
+        <Shortcut Id="MenuStart" Name="Start wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="start"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Start the wEdge service" />
+        <Shortcut Id="MenuStop" Name="Stop wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="stop"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Stop the wEdge service" />
+        <Shortcut Id="MenuRestart" Name="Restart wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="restart"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Restart the wEdge service" />
+        <Shortcut Id="MenuStatus" Name="wEdge status" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="status"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Show whether the wEdge service is running" />
+        <Shortcut Id="MenuEdit" Name="Edit wEdge configuration" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="edit"
+                  WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Edit, check and apply the configuration" />
+        <Shortcut Id="MenuWebRoot" Name="wEdge web folder" Target="[WEBROOT]" />
+        <Shortcut Id="MenuConfig" Name="wEdge configuration folder" Target="[CONFIGFOLDER]" />
+        <Shortcut Id="MenuLogs" Name="wEdge logs" Target="[LOGFOLDER]" />
+        <Shortcut Id="MenuGuide" Name="wEdge user guide" Target="[INSTALLFOLDER]docs\html\index.html" />
+        <Shortcut Id="MenuUninstall" Name="Uninstall wEdge" Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]"
+                  Icon="wedge.ico" Description="Remove wEdge (configuration and web content are kept)" />
+        <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\wedge\Shortcuts" Name="StartMenu" Value="1" Type="integer" KeyPath="yes" />
       </Component>
     </Feature>
 
-    <!-- Service registration reuses the tested `wedge service` commands. -->
-    <CustomAction Id="InstallService" FileRef="WedgeExe"
-                  ExeCommand='service install --config "[DataFolder]wedge.toml"'
-                  Execute="deferred" Impersonate="no" Return="check" />
-    <CustomAction Id="StartService" Directory="INSTALLFOLDER"
-                  ExeCommand='"[System64Folder]sc.exe" start wedge'
+    <!-- Each step reuses a tested `wedge` command. Directory properties end
+         in a backslash, so a quoted one is written "[DIR]\" (the doubled
+         backslash keeps the closing quote a quote). -->
+    <CustomAction Id="PurgeOld" FileRef="WedgeExe"
+                  ExeCommand='service purge --config "[OLD_CONFIGFOLDER]wedge.toml" --web-root "[OLD_WEBROOT]\" --log-dir "[PURGE_LOGDIR]\"'
                   Execute="deferred" Impersonate="no" Return="ignore" />
-    <CustomAction Id="UninstallService" FileRef="WedgeExe"
-                  ExeCommand="service uninstall"
+    <CustomAction Id="InitConfigWithAdmin" FileRef="WedgeExe"
+                  ExeCommand='init --config "[CONFIGFOLDER]wedge.toml" --web-root "[WEBROOT]\" --port [HTTPPORT] --admin-port [ADMINPORT] [PUBLICARG] --force'
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="InitConfig" FileRef="WedgeExe"
+                  ExeCommand='init --config "[CONFIGFOLDER]wedge.toml" --web-root "[WEBROOT]\" --port [HTTPPORT] [PUBLICARG] --force'
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="RollbackService" FileRef="WedgeExe" ExeCommand="service uninstall"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="InstallService" FileRef="WedgeExe"
+                  ExeCommand='service install --config "[CONFIGFOLDER]wedge.toml" --log-dir "[LOGFOLDER]\"'
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <!-- HideTarget keeps the password out of the installer log. -->
+    <CustomAction Id="SetAdminPassword" FileRef="WedgeExe" HideTarget="yes"
+                  ExeCommand='admin set-password --config "[CONFIGFOLDER]wedge.toml" --user "[ADMINUSER]" --password "[ADMINPASSWORD]"'
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="StartService" FileRef="WedgeExe" ExeCommand="service start"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="UninstallService" FileRef="WedgeExe" ExeCommand="service uninstall"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <InstallExecuteSequence>
       <Custom Action="UninstallService" Before="RemoveFiles" Condition='REMOVE="ALL"' />
-      <Custom Action="InstallService" After="InstallFiles" Condition='NOT REMOVE' />
-      <Custom Action="StartService" After="InstallService" Condition='NOT REMOVE' />
+      <Custom Action="PurgeOld" After="InstallFiles"
+              Condition='FRESHINSTALL AND WIX_UPGRADE_DETECTED AND PURGEOLD="1"' />
+      <Custom Action="InitConfigWithAdmin" After="PurgeOld" Condition="FRESHINSTALL AND ADMINPASSWORD" />
+      <Custom Action="InitConfig" After="InitConfigWithAdmin" Condition="FRESHINSTALL AND NOT ADMINPASSWORD" />
+      <Custom Action="RollbackService" After="InitConfig" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="InstallService" After="RollbackService" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="SetAdminPassword" After="InstallService" Condition="FRESHINSTALL AND ADMINPASSWORD" />
+      <Custom Action="StartService" After="SetAdminPassword" Condition="NOT REMOVE" />
     </InstallExecuteSequence>
+
+    <!-- Finish page: optionally open the admin page. -->
+    <CustomAction Id="OpenAdminPage" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec" Impersonate="yes" />
   </Package>
+
+  <Fragment>
+    <UI Id="WedgeUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+      <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open the wEdge admin page" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Publish Dialog="ExitDialog" Control="Finish" Property="WixShellExecTarget" Value="http://127.0.0.1:[ADMINPORT]/" Order="1" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenAdminPage" Order="2"
+               Condition='WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND (ADMINPASSWORD OR (OLD_ADMINPORT AND UPGRADEMODE="upgrade"))' />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <!-- New install: welcome, licence, folders, ports, admin account.
+           Older version present: welcome, then the upgrade choice. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="WedgeOldVersionDlg" Condition="NOT Installed AND WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WedgeOldVersionDlg" Condition="WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Condition="NOT WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition='LicenseAccepted = "1"' />
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="WedgePathsDlg" Order="2" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WedgeAdminDlg" Order="1"
+               Condition='NOT Installed AND NOT (WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade")' />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WedgeOldVersionDlg" Order="2"
+               Condition='NOT Installed AND WIX_UPGRADE_DETECTED AND UPGRADEMODE="upgrade"' />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="3" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="3" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+      <!-- An older version is installed: upgrade it, or uninstall it and
+           start fresh. -->
+      <Dialog Id="WedgeOldVersionDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Condition='UPGRADEMODE="upgrade"' />
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" Condition='UPGRADEMODE="fresh"' />
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="WelcomeDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Previous installation found" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Another version of wEdge is installed on this computer." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Where" Type="Text" X="20" Y="56" Width="330" Height="26" NoPrefix="yes"
+                 Text="It is installed in [OLD_INSTALLDIR], with its configuration in [OLD_CONFIGFOLDER]." />
+        <Control Id="Mode" Type="RadioButtonGroup" X="20" Y="88" Width="330" Height="80" Property="UPGRADEMODE">
+          <RadioButtonGroup Property="UPGRADEMODE">
+            <RadioButton Value="upgrade" X="0" Y="0" Width="330" Height="30"
+                         Text="&amp;Upgrade it: keep its folders, configuration, web content, ports and administrator accounts" />
+            <RadioButton Value="fresh" X="0" Y="40" Width="330" Height="30"
+                         Text="Uninstall it and install &amp;fresh: choose new folders, ports and an administrator account" />
+          </RadioButtonGroup>
+        </Control>
+        <Control Id="Purge" Type="CheckBox" X="40" Y="172" Width="310" Height="30" Property="PURGEOLD" CheckBoxValue="1"
+                 Text="Also &amp;delete its configuration, administrator accounts, logs and the web folder wEdge created (folders that held your own files are kept)"
+                 EnableCondition='UPGRADEMODE="fresh"' DisableCondition='UPGRADEMODE="upgrade"' />
+        <Control Id="Note" Type="Text" X="20" Y="210" Width="330" Height="20" NoPrefix="yes"
+                 Text="Both choices remove the old program files and service first." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      </Dialog>
+
+      <!-- The web application folder and the configuration folder. -->
+      <Dialog Id="WedgePathsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="SetTargetPath" Value="WEBROOT" Order="1" />
+          <Publish Event="SetTargetPath" Value="CONFIGFOLDER" Order="2" />
+          <Publish Event="NewDialog" Value="WedgePortsDlg" Order="3" />
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Web content and configuration" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Choose where your site and the configuration file live." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="WebLabel" Type="Text" X="20" Y="56" Width="330" Height="22" NoPrefix="yes"
+                 Text="&amp;Web application folder: wEdge serves the files in it. An empty folder gets a default page; existing files are kept." />
+        <Control Id="WebPath" Type="PathEdit" X="20" Y="80" Width="270" Height="18" Property="WEBROOT" />
+        <Control Id="WebBrowse" Type="PushButton" X="294" Y="80" Width="56" Height="17" Text="B&amp;rowse...">
+          <Publish Property="_BrowseProperty" Value="WEBROOT" Order="1" />
+          <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+        </Control>
+        <Control Id="ConfigLabel" Type="Text" X="20" Y="112" Width="330" Height="30" NoPrefix="yes"
+                 Text="&amp;Configuration folder: holds wedge.toml, conf.d and the administrator accounts. Only administrators can change it." />
+        <Control Id="ConfigPath" Type="PathEdit" X="20" Y="144" Width="270" Height="18" Property="CONFIGFOLDER" />
+        <Control Id="ConfigBrowse" Type="PushButton" X="294" Y="144" Width="56" Height="17" Text="Br&amp;owse...">
+          <Publish Property="_BrowseProperty" Value="CONFIGFOLDER" Order="1" />
+          <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+        </Control>
+        <Control Id="Logs" Type="Text" X="20" Y="180" Width="330" Height="20" NoPrefix="yes"
+                 Text="Logs are written to the logs folder inside the install folder." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      </Dialog>
+
+      <!-- Ports and network reach. -->
+      <Dialog Id="WedgePortsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Property="WEDGE_ERROR" Value="{}" Order="1" />
+          <Publish Property="WEDGE_ERROR" Value="The web port must be a number from 1 to 65535." Order="2"
+                   Condition="NOT (HTTPPORT &gt;= 1 AND HTTPPORT &lt;= 65535)" />
+          <Publish Property="WEDGE_ERROR" Value="The admin port must be a number from 1 to 65535." Order="3"
+                   Condition="NOT WEDGE_ERROR AND NOT (ADMINPORT &gt;= 1 AND ADMINPORT &lt;= 65535)" />
+          <Publish Property="WEDGE_ERROR" Value="The web port and the admin port must differ." Order="4"
+                   Condition="NOT WEDGE_ERROR AND HTTPPORT = ADMINPORT" />
+          <Publish Event="SpawnDialog" Value="WedgeErrorDlg" Order="5" Condition="WEDGE_ERROR" />
+          <Publish Event="NewDialog" Value="WedgeAdminDlg" Order="6" Condition="NOT WEDGE_ERROR" />
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="WedgePathsDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Ports" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Choose the ports for the website and the admin page." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="HttpLabel" Type="Text" X="20" Y="60" Width="200" Height="12" NoPrefix="yes" Text="&amp;Web port (HTTP):" />
+        <Control Id="HttpPort" Type="Edit" X="230" Y="58" Width="60" Height="17" Property="HTTPPORT" Integer="yes" Text="{5}" />
+        <Control Id="Public" Type="CheckBox" X="20" Y="82" Width="330" Height="30" Property="PUBLICACCESS" CheckBoxValue="1"
+                 Text="&amp;Allow other computers to reach the website: listen on every network interface and open this port in Windows Firewall" />
+        <Control Id="PublicNote" Type="Text" X="36" Y="114" Width="314" Height="22" NoPrefix="yes"
+                 Text="Leave it off to serve only this computer (http://127.0.0.1:[HTTPPORT]/); you can change it later in wedge.toml." />
+        <Control Id="AdminLabel" Type="Text" X="20" Y="150" Width="200" Height="12" NoPrefix="yes" Text="A&amp;dmin port:" />
+        <Control Id="AdminPort" Type="Edit" X="230" Y="148" Width="60" Height="17" Property="ADMINPORT" Integer="yes" Text="{5}" />
+        <Control Id="AdminNote" Type="Text" X="20" Y="172" Width="330" Height="40" NoPrefix="yes"
+                 Text="The admin page (status, metrics and configuration reload) is reachable only from this computer, at http://127.0.0.1:[ADMINPORT]/, and needs the administrator account from the next step." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      </Dialog>
+
+      <!-- The administrator account for the admin page. -->
+      <Dialog Id="WedgeAdminDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Property="WEDGE_ERROR" Value="{}" Order="1" />
+          <Publish Property="WEDGE_ERROR" Value="Enter a user name." Order="2"
+                   Condition="ADMINPASSWORD AND NOT ADMINUSER" />
+          <Publish Property="WEDGE_ERROR" Value="The two passwords differ." Order="3"
+                   Condition="NOT WEDGE_ERROR AND ADMINPASSWORD &lt;&gt; ADMINPASSWORD2" />
+          <Publish Property="WEDGE_ERROR" Value="The user name and password cannot contain a double quote, and the password cannot end with a backslash." Order="4"
+                   Condition="NOT WEDGE_ERROR AND (ADMINUSER &gt;&lt; QUOTECHAR OR ADMINPASSWORD &gt;&lt; QUOTECHAR OR ADMINPASSWORD &gt;&gt; BACKSLASH)" />
+          <Publish Event="SpawnDialog" Value="WedgeErrorDlg" Order="5" Condition="WEDGE_ERROR" />
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="6" Condition="NOT WEDGE_ERROR" />
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="WedgePortsDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Administrator account" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="The account you sign in to the admin page with." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="UserLabel" Type="Text" X="20" Y="60" Width="120" Height="12" NoPrefix="yes" Text="&amp;User name:" />
+        <Control Id="User" Type="Edit" X="150" Y="58" Width="200" Height="17" Property="ADMINUSER" Text="{64}" />
+        <Control Id="PasswordLabel" Type="Text" X="20" Y="84" Width="120" Height="12" NoPrefix="yes" Text="&amp;Password:" />
+        <Control Id="Password" Type="Edit" X="150" Y="82" Width="200" Height="17" Property="ADMINPASSWORD" Password="yes" Text="{128}" />
+        <Control Id="ConfirmLabel" Type="Text" X="20" Y="108" Width="120" Height="12" NoPrefix="yes" Text="&amp;Confirm password:" />
+        <Control Id="Confirm" Type="Edit" X="150" Y="106" Width="200" Height="17" Property="ADMINPASSWORD2" Password="yes" Text="{128}" />
+        <Control Id="Rules" Type="Text" X="20" Y="134" Width="330" Height="40" NoPrefix="yes"
+                 Text="User name: letters, digits, '.', '_', '-' or '@'. Password: at least 12 characters. Setup stops with an error if either does not meet these rules. Only an Argon2id hash of the password is stored." />
+        <Control Id="Skip" Type="Text" X="20" Y="180" Width="330" Height="40" NoPrefix="yes"
+                 Text="Leave the password empty to install without the admin page; you can add an account later with: wedge admin set-password (see the user guide)." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      </Dialog>
+
+      <!-- Shows WEDGE_ERROR. -->
+      <Dialog Id="WedgeErrorDlg" Width="260" Height="95" Title="[ProductName] Setup">
+        <Control Id="Message" Type="Text" X="15" Y="15" Width="230" Height="45" NoPrefix="yes" Text="[WEDGE_ERROR]" />
+        <Control Id="OK" Type="PushButton" X="102" Y="68" Width="56" Height="17" Default="yes" Cancel="yes" Text="OK">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
 </Wix>

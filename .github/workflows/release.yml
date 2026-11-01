@@ -75,8 +75,15 @@ jobs:
       - run: pwsh scripts/render-guide.ps1
       - run: pwsh scripts/build-all.ps1 -SkipLinux
       - run: pwsh scripts/build-msi.ps1
-      # Real install, service start, HTTP check and uninstall on the runner.
-      - run: pwsh scripts/test-msi.ps1 (Get-ChildItem build/*.msi).FullName
+      # Real install, upgrade from the latest release, service, website,
+      # admin login and uninstall on the runner.
+      - name: Download the latest released installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory previous | Out-Null
+          gh release download --repo ${{ github.repository }} --pattern '*.msi' --dir previous
+      - run: pwsh scripts/test-msi.ps1 (Get-ChildItem build/*.msi).FullName -PreviousMsi (Get-ChildItem previous/*.msi).FullName
       # Authenticode signing through SignPath Foundation (threat model T6.1).
       # Off until the project is approved and SIGNPATH_API_TOKEN exists.
       - id: unsigned

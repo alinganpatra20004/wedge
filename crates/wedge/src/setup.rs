@@ -57,7 +57,10 @@ pub(crate) fn init(options: &Init<'_>) -> Result<(), String> {
         std::fs::rename(&config, &backup).map_err(|e| format!("{}: {e}", backup.display()))?;
         println!("kept the previous file as {}", backup.display());
     }
-    if !web_root.exists() {
+    // A missing or empty folder holds nothing but what wedge puts there, so
+    // it is marked as wedge's; a folder with content stays the owner's.
+    let empty = std::fs::read_dir(&web_root).map_or(true, |mut d| d.next().is_none());
+    if empty {
         std::fs::create_dir_all(&web_root).map_err(|e| format!("{}: {e}", web_root.display()))?;
         std::fs::write(web_root.join(CREATED_MARKER), "created by wedge init\n")
             .map_err(|e| format!("{}: {e}", web_root.display()))?;
@@ -177,6 +180,29 @@ fn toml_string(text: &str) -> String {
     out
 }
 
+/// The users file: given directly, or the `file:` reference in the
+/// configuration's `[server.admin] users`.
+pub(crate) fn users_file(
+    direct: Option<PathBuf>,
+    config: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(file) = direct {
+        return Ok(file);
+    }
+    let config = config.ok_or("give --users-file or --config")?;
+    let loaded = wedge_config::load(config).map_err(|e| e.to_string())?;
+    match loaded.server.admin.and_then(|a| a.users) {
+        Some(wedge_config::SecretRef::File(path)) => Ok(path),
+        Some(other) => Err(format!(
+            "[server.admin] users is {other}; give --users-file for a file to write"
+        )),
+        None => Err(format!(
+            "{} has no [server.admin] users setting",
+            config.display()
+        )),
+    }
+}
+
 /// Sets `user`'s password in `users_file`, creating the file if needed.
 /// The password comes from `password` (the Windows installer), else is read
 /// from the terminal without echo (asked twice), else from one stdin line.
@@ -286,6 +312,10 @@ mod tests {
             force: false,
         };
         init(&options).unwrap();
+        assert_eq!(
+            users_file(None, Some(&config)).unwrap(),
+            config.with_file_name(USERS_FILE)
+        );
         let loaded = wedge_config::load(&config).unwrap();
         assert_eq!(loaded.server.listen[0].to_string(), "127.0.0.1:18080");
         let admin = loaded.server.admin.unwrap();
@@ -322,6 +352,7 @@ mod tests {
     #[test]
     fn init_refuses_bad_ports_and_keeps_existing_roots_unmarked() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("about.html"), "the owner's page").unwrap();
         let config = dir.path().join("wedge.toml");
         let same = Init {
             config: &config,
@@ -338,8 +369,20 @@ mod tests {
             ..same
         })
         .unwrap();
-        // The root already existed: no marker, so a purge would keep it.
+        // The root already had content: no marker, so a purge would keep it.
         assert!(!dir.path().join(CREATED_MARKER).exists());
+        // An existing but empty folder (made by the installer) is marked.
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        init(&Init {
+            config: &dir.path().join("second.toml"),
+            web_root: &empty,
+            admin_port: None,
+            port: 18082,
+            ..same
+        })
+        .unwrap();
+        assert!(empty.join(CREATED_MARKER).exists());
     }
 
     #[test]

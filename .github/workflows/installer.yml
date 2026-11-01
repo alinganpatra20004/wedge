@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Alingan Patra
+
+# Builds the Windows installer and runs scripts/test-msi.ps1 on a clean
+# runner (fresh install, upgrade from the latest release, fresh install over
+# it with its data deleted) whenever the installer or the code it drives
+# changes.
+name: Installer
+on:
+  push:
+    branches: [main]
+    paths:
+      - packaging/windows/**
+      - scripts/build-msi.ps1
+      - scripts/test-msi.ps1
+      - crates/wedge/**
+      - crates/wedge-core/src/admin.rs
+      - crates/wedge-core/src/auth.rs
+      - .github/workflows/installer.yml
+  pull_request:
+    paths:
+      - packaging/windows/**
+      - scripts/build-msi.ps1
+      - scripts/test-msi.ps1
+      - crates/wedge/**
+      - crates/wedge-core/src/admin.rs
+      - crates/wedge-core/src/auth.rs
+      - .github/workflows/installer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - run: choco install pandoc -y --no-progress
+      - run: pwsh scripts/render-guide.ps1
+      - run: pwsh scripts/build-all.ps1 -SkipLinux
+      - run: pwsh scripts/build-msi.ps1
+      - name: Download the latest released installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory previous | Out-Null
+          gh release download --repo ${{ github.repository }} --pattern '*.msi' --dir previous
+      - run: pwsh scripts/test-msi.ps1 (Get-ChildItem build/*.msi).FullName -PreviousMsi (Get-ChildItem previous/*.msi).FullName
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msi-logs
+          path: |
+            ${{ runner.temp }}/wedge-msi-logs/
+            C:/wedge test/logs/
+          if-no-files-found: ignore

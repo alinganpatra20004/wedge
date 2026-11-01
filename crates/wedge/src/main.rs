@@ -88,8 +88,11 @@ enum AdminCommand {
     /// only as an Argon2id hash.
     SetPassword {
         /// The users file named by `[server.admin] users`.
-        #[arg(long)]
-        users_file: PathBuf,
+        #[arg(long, required_unless_present = "config", conflicts_with = "config")]
+        users_file: Option<PathBuf>,
+        /// Or: the configuration file whose `[server.admin] users` names it.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
         /// Account name.
         #[arg(long, default_value = "admin")]
         user: String,
@@ -190,14 +193,15 @@ fn main() -> ExitCode {
             action:
                 AdminCommand::SetPassword {
                     users_file,
+                    config,
                     user,
                     password,
                 },
-        } => report(setup::set_password(
-            &users_file,
-            &user,
-            password.map(zeroize::Zeroizing::new),
-        )),
+        } => report(
+            setup::users_file(users_file, config.as_deref()).and_then(|file| {
+                setup::set_password(&file, &user, password.map(zeroize::Zeroizing::new))
+            }),
+        ),
         #[cfg(windows)]
         Command::Service { action } => report(match action {
             ServiceCommand::Install {
