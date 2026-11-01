@@ -86,10 +86,16 @@ pub fn load(master: &Path) -> Result<Config, ConfigError> {
     if capture.is_relative() {
         *capture = base.join(&*capture);
     }
-    if let Some(SecretRef::File(path)) = config.server.admin.as_mut().and_then(|a| a.token.as_mut())
-    {
-        if path.is_relative() {
-            *path = base.join(&*path);
+    if let Some(admin) = config.server.admin.as_mut() {
+        for reference in [admin.token.as_mut(), admin.users.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if let SecretRef::File(path) = reference {
+                if path.is_relative() {
+                    *path = base.join(&*path);
+                }
+            }
         }
     }
     for vhost in &mut config.vhost {

@@ -9,7 +9,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 #[cfg(windows)]
+mod acl;
+#[cfg(windows)]
 mod service;
+mod setup;
 
 /// wedge: web and application server.
 #[derive(Debug, Parser)]
@@ -42,11 +45,59 @@ enum Command {
     },
     /// Print the configuration JSON Schema.
     Schema,
-    /// Install, remove or run wedge as a Windows service.
+    /// Write a starter configuration and create the web folder with a
+    /// default page.
+    Init {
+        /// Configuration file to write.
+        #[arg(short, long, default_value = "wedge.toml")]
+        config: PathBuf,
+        /// Folder the site is served from (created if missing).
+        #[arg(long, default_value = "www")]
+        web_root: PathBuf,
+        /// Port for the website.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Port for the admin page, metrics and reload (loopback only).
+        /// Leave it out to turn the admin listener off.
+        #[arg(long)]
+        admin_port: Option<u16>,
+        /// Listen on every network interface, not only this computer.
+        #[arg(long)]
+        public: bool,
+        /// Replace an existing configuration file (a backup is kept).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Manage administrator accounts for the admin page.
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommand,
+    },
+    /// Install, remove, control or run wedge as a Windows service.
     #[cfg(windows)]
     Service {
         #[command(subcommand)]
         action: ServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminCommand {
+    /// Create an account or change its password. The password is asked for
+    /// without echo (or read from one line of standard input) and stored
+    /// only as an Argon2id hash.
+    SetPassword {
+        /// The users file named by `[server.admin] users`.
+        #[arg(long)]
+        users_file: PathBuf,
+        /// Account name.
+        #[arg(long, default_value = "admin")]
+        user: String,
+        /// The password itself. Only for the Windows installer, which runs
+        /// this as SYSTEM: on a command line it is visible to the system's
+        /// administrators while the command runs.
+        #[arg(long, hide = true)]
+        password: Option<String>,
     },
 }
 
@@ -58,13 +109,38 @@ enum ServiceCommand {
         /// Path to the master configuration file.
         #[arg(short, long, default_value = "wedge.toml")]
         config: PathBuf,
-        /// Allow a wedge.exe outside Program Files (test setups only: other
-        /// users may be able to replace the binary the service runs).
+        /// Folder for wedge.log (default %ProgramData%\wedge\logs).
+        #[arg(long)]
+        log_dir: Option<PathBuf>,
+        /// Skip the check that only administrators can change wedge.exe and
+        /// the folders above it (test setups only: other users may be able
+        /// to replace the binary the service runs).
         #[arg(long)]
         allow_unprotected_path: bool,
     },
     /// Stop and remove the "wedge" service.
     Uninstall,
+    /// Start the service.
+    Start,
+    /// Stop the service.
+    Stop,
+    /// Stop and start the service.
+    Restart,
+    /// Show whether the service is running.
+    Status,
+    /// Ask the running service to reload its configuration.
+    Reload,
+    /// Delete an earlier installation's configuration, web content (only if
+    /// wedge created the folder) and logs. Used by the installer.
+    #[command(hide = true)]
+    Purge {
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        web_root: Option<PathBuf>,
+        #[arg(long)]
+        log_dir: Option<PathBuf>,
+    },
     /// Entry point used by the Service Control Manager.
     #[command(hide = true)]
     Run {
@@ -95,24 +171,53 @@ fn main() -> ExitCode {
             }
         },
         Command::Reload { config } => reload(&config),
+        Command::Init {
+            config,
+            web_root,
+            port,
+            admin_port,
+            public,
+            force,
+        } => report(setup::init(&setup::Init {
+            config: &config,
+            web_root: &web_root,
+            port,
+            admin_port,
+            public,
+            force,
+        })),
+        Command::Admin {
+            action:
+                AdminCommand::SetPassword {
+                    users_file,
+                    user,
+                    password,
+                },
+        } => report(setup::set_password(
+            &users_file,
+            &user,
+            password.map(zeroize::Zeroizing::new),
+        )),
         #[cfg(windows)]
-        Command::Service { action } => {
-            let result = match action {
-                ServiceCommand::Install {
-                    config,
-                    allow_unprotected_path,
-                } => service::install(&config, allow_unprotected_path),
-                ServiceCommand::Uninstall => service::uninstall(),
-                ServiceCommand::Run { config, log_file } => service::run(config, log_file),
-            };
-            match result {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("{e}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
+        Command::Service { action } => report(match action {
+            ServiceCommand::Install {
+                config,
+                log_dir,
+                allow_unprotected_path,
+            } => service::install(&config, log_dir.as_deref(), allow_unprotected_path),
+            ServiceCommand::Uninstall => service::uninstall(),
+            ServiceCommand::Start => service::control(service::Control::Start),
+            ServiceCommand::Stop => service::control(service::Control::Stop),
+            ServiceCommand::Restart => service::control(service::Control::Restart),
+            ServiceCommand::Status => service::control(service::Control::Status),
+            ServiceCommand::Reload => service::control(service::Control::Reload),
+            ServiceCommand::Purge {
+                config,
+                web_root,
+                log_dir,
+            } => service::purge(config.as_deref(), web_root.as_deref(), log_dir.as_deref()),
+            ServiceCommand::Run { config, log_file } => service::run(config, log_file),
+        }),
         Command::Schema => {
             let schema = wedge_config::json_schema();
             match serde_json::to_string_pretty(&schema) {
@@ -125,6 +230,17 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+    }
+}
+
+/// Prints an error, if any, and turns it into the exit code.
+fn report(result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
         }
     }
 }

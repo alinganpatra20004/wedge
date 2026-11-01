@@ -29,6 +29,7 @@ use tokio::sync::{watch, Semaphore};
 use wedge_config::{AdminConfig, Config, DebugConfig, IpNet, Limits, Secret};
 
 use crate::admin;
+use crate::auth::{self, Login, Users};
 use crate::capture::{here, Capture, Handled, Recorded};
 use crate::files::{self, Root};
 use crate::headers::Policy;
@@ -62,6 +63,8 @@ pub enum ServerError {
     Capture(#[source] io::Error),
     #[error("admin token: {0}")]
     AdminToken(#[source] wedge_config::SecretError),
+    #[error("admin users: {0}")]
+    AdminUsers(String),
     #[error("invalid response header configuration: {0}")]
     Headers(String),
 }
@@ -122,6 +125,13 @@ struct Shared {
     admin_allow: Vec<IpNet>,
     /// Bearer token for `POST /-/reload`, resolved once at startup.
     admin_token: Option<Secret>,
+    /// Failed-login tracking for the admin accounts (T5.14).
+    admin_guard: auth::Guard,
+    /// The outcome of the last reload from the status page, shown once.
+    reload_notice: std::sync::Mutex<Option<(bool, String)>>,
+    /// Bound addresses and what each serves, for the status page.
+    bound: Vec<(SocketAddr, &'static str)>,
+    started: Instant,
     /// Time of the last reload; the lock also serializes reloads (T5.5).
     last_reload: tokio::sync::Mutex<Option<Instant>>,
     /// The debug capture log, when `[server.debug] read_packet` is on.
@@ -181,6 +191,10 @@ struct State {
     metrics: Metrics,
     /// Vhost names in config order, for the capture log.
     vhost_names: Vec<String>,
+    /// Admin accounts from `admin.users`; re-read on every reload.
+    admin_users: Option<Arc<Users>>,
+    /// The vhosts as the admin status page lists them.
+    vhost_info: Vec<admin::VhostInfo>,
     /// Dropping or signalling this stops this state's health checks.
     health_stop: watch::Sender<bool>,
 }
@@ -209,6 +223,19 @@ impl State {
         if let Some(port) = https_port {
             headers.set_https_port(port);
         }
+        let admin_users = match config.server.admin.as_ref().and_then(|a| a.users.as_ref()) {
+            Some(reference) => {
+                let secret = reference
+                    .resolve()
+                    .map_err(|e| ServerError::AdminUsers(e.to_string()))?;
+                let text = std::str::from_utf8(secret.expose())
+                    .map_err(|_| ServerError::AdminUsers(format!("{reference} is not UTF-8")))?;
+                let users = Users::parse(text)
+                    .map_err(|e| ServerError::AdminUsers(format!("{reference}: {e}")))?;
+                Some(Arc::new(users))
+            }
+            None => None,
+        };
         let proxy = Proxy::new(config);
         let (health_stop, stop_rx) = watch::channel(false);
         proxy.spawn_health_checks(&stop_rx);
@@ -221,6 +248,8 @@ impl State {
             proxy,
             metrics: Metrics::new(config),
             vhost_names: config.vhost.iter().map(|v| v.name.clone()).collect(),
+            admin_users,
+            vhost_info: admin::VhostInfo::from_config(config),
             health_stop,
         })
     }
@@ -285,6 +314,17 @@ impl Server {
             None => None,
         };
         let state = State::build(config, https_port).await?;
+        let bound = listeners
+            .iter()
+            .filter_map(|(l, kind)| {
+                let what = match kind {
+                    Kind::Plain => "HTTP",
+                    Kind::Tls => "HTTPS",
+                    Kind::Admin => "admin (this page, metrics, reload)",
+                };
+                Some((l.local_addr().ok()?, what))
+            })
+            .collect();
         let capture = Capture::start(&config.server.debug).map_err(ServerError::Capture)?;
         if capture.is_some() {
             warn_capture_on(&config.server.debug);
@@ -306,6 +346,10 @@ impl Server {
                     .map(|a| a.allow.clone())
                     .unwrap_or_default(),
                 admin_token,
+                admin_guard: auth::Guard::new(),
+                reload_notice: std::sync::Mutex::new(None),
+                bound,
+                started: Instant::now(),
                 last_reload: tokio::sync::Mutex::new(None),
                 capture,
             }),
@@ -609,7 +653,7 @@ async fn serve<I>(
         let conn = conn.clone();
         async move {
             let response = if admin {
-                admin_request(&shared, req).await
+                admin_request(&shared, req, conn.peer).await
             } else {
                 handle(&shared.load(), req, &conn).await
             };
@@ -624,16 +668,96 @@ async fn serve<I>(
     }
 }
 
-/// `POST /-/reload` with the admin token; everything else goes to the
-/// metrics handler.
-async fn admin_request(shared: &Shared, req: Request<Incoming>) -> Response<Body> {
-    if req.uri().path() != "/-/reload" {
-        let state = shared.load();
+/// One admin request. With `admin.users` set, everything needs a login
+/// (T5.13); `POST /-/reload` also accepts the bearer token, for `wedge
+/// reload` and scripts. Without users, only `/metrics` and token reload exist.
+async fn admin_request(
+    shared: &Shared,
+    req: Request<Incoming>,
+    peer: SocketAddr,
+) -> Response<Body> {
+    if !admin::host_is_local(&req) {
+        // T5.3: a DNS-rebinding page reaches us with its own host name.
+        return response::status(StatusCode::MISDIRECTED_REQUEST);
+    }
+    let state = shared.load();
+    let reload = req.uri().path() == "/-/reload";
+    if reload && (state.admin_users.is_none() || admin::is_bearer(&req)) {
+        let Some(token) = shared.admin_token.as_ref() else {
+            return response::status(StatusCode::NOT_FOUND);
+        };
+        if let Some(response) = admin::reload_method_rejection(&req) {
+            return response;
+        }
+        if !admin::has_token(&req, token) {
+            return admin::bearer_challenge();
+        }
+        return reload_reply(shared).await;
+    }
+    let Some(users) = &state.admin_users else {
         return admin::respond(&state.metrics, &state.proxy, &req);
+    };
+    let authorization = req.headers().get(hyper::header::AUTHORIZATION);
+    let user = match shared
+        .admin_guard
+        .login(users, peer.ip(), authorization.map(|v| v.as_bytes()))
+        .await
+    {
+        Login::Ok(user) => user,
+        Login::Denied => return admin::login_challenge(),
+        Login::LockedOut(wait) => return admin::locked_out(wait),
+    };
+    let readable = matches!(*req.method(), Method::GET | Method::HEAD);
+    match req.uri().path() {
+        "/-/reload" => {
+            if let Some(response) = admin::reload_method_rejection(&req) {
+                return response;
+            }
+            if !admin::same_origin(&req) {
+                tracing::warn!(%peer, %user, "admin reload refused: cross-site request");
+                return response::status(StatusCode::FORBIDDEN);
+            }
+            tracing::info!(%peer, %user, "reload requested on the admin listener");
+            if !admin::wants_html(&req) {
+                return reload_reply(shared).await;
+            }
+            let notice = match shared.reload().await {
+                Ok(()) => (true, "Configuration reloaded.".to_owned()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "reload refused");
+                    (false, format!("Reload failed: {e}"))
+                }
+            };
+            *shared
+                .reload_notice
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(notice);
+            admin::see_status_page()
+        }
+        "/" if readable => {
+            let notice = shared
+                .reload_notice
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            admin::status_page(&admin::Status {
+                user: &user,
+                uptime: shared.started.elapsed(),
+                listeners: &shared.bound,
+                vhosts: &state.vhost_info,
+                metrics: &state.metrics,
+                proxy: &state.proxy,
+                notice,
+            })
+        }
+        "/-/admin.css" if readable => admin::stylesheet(),
+        "/" | "/-/admin.css" => response::status(StatusCode::METHOD_NOT_ALLOWED),
+        _ => admin::respond(&state.metrics, &state.proxy, &req),
     }
-    if let Some(response) = admin::reload_rejection(&req, shared.admin_token.as_ref()) {
-        return response;
-    }
+}
+
+/// Reloads and answers in plain text, for `wedge reload` and scripts.
+async fn reload_reply(shared: &Shared) -> Response<Body> {
     match shared.reload().await {
         Ok(()) => {
             let mut response = Response::new(response::full("reloaded\n"));

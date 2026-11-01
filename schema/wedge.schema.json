@@ -25,6 +25,17 @@
             }
           ],
           "description": "Bearer token required for `POST /-/reload`, as a secret reference\n(`env:NAME` or `file:/path`). Without it, reload over HTTP is off."
+        },
+        "users": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Administrator accounts, as a secret reference to a users file: one\n`name:$argon2id$...` line per account, written by `wedge admin\nset-password`. When set, every admin request (the status page,\n`/metrics` and reload) needs one of these accounts (HTTP Basic), and\n`GET /` shows the status page. Reloads re-read the file."
         }
       },
       "required": [

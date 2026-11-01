@@ -45,6 +45,15 @@ impl VhostSeries {
     }
 }
 
+/// What [`Metrics::totals`] returns.
+pub(crate) struct Totals {
+    pub(crate) requests: u64,
+    /// Requests per vhost, in config order.
+    pub(crate) per_vhost: Vec<u64>,
+    pub(crate) open_connections: i64,
+    pub(crate) connections: u64,
+}
+
 /// All metrics; shared by every connection.
 pub(crate) struct Metrics {
     /// Vhost names in config order, then `"-"` for requests no vhost answered.
@@ -120,6 +129,25 @@ impl Metrics {
     pub(crate) fn upstream(&self, upstream: usize, outcome: usize) {
         if let Some(counters) = self.upstream_requests.get(upstream) {
             counters[outcome.min(OUTCOMES.len() - 1)].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Summary counters for the admin status page.
+    pub(crate) fn totals(&self) -> Totals {
+        // The last series counts requests that no vhost answered.
+        let per_vhost: Vec<u64> = self
+            .vhosts
+            .iter()
+            .map(|s| s.count.load(Ordering::Relaxed))
+            .collect();
+        Totals {
+            requests: per_vhost.iter().fold(0, |a, b| a.saturating_add(*b)),
+            per_vhost,
+            open_connections: self.connections_open.load(Ordering::Relaxed).max(0),
+            connections: self
+                .connections_total
+                .iter()
+                .fold(0, |a, c| a.saturating_add(c.load(Ordering::Relaxed))),
         }
     }
 

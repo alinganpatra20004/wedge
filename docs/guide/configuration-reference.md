@@ -60,6 +60,7 @@ The admin listener (`[server.admin]`): `GET /metrics` and `POST /-/reload`. See 
 | `allow` | list of IP address or CIDR range |  | Client addresses allowed to connect. Defaults to loopback only. |
 | `listen` | string | **required** | Address of the admin listener, such as `"127.0.0.1:9900"`. Keep it off public interfaces. |
 | `token` | secret reference: `"env:NAME"` or `"file:/path"` |  | Bearer token required for `POST /-/reload`, as a secret reference (`env:NAME` or `file:/path`). Without it, reload over HTTP is off. |
+| `users` | secret reference: `"env:NAME"` or `"file:/path"` |  | Administrator accounts, as a secret reference to a users file: one `name:$argon2id$...` line per account, written by `wedge admin set-password`. When set, every admin request (the status page, `/metrics` and reload) needs one of these accounts (HTTP Basic), and `GET /` shows the status page. Reloads re-read the file. |
 
 ## `[server.debug]`
 

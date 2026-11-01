@@ -252,6 +252,194 @@ async fn reload_applies_good_config_and_keeps_old_on_errors() {
     assert_eq!(header(&page().await, "x-version"), Some("2"));
 }
 
+/// A reloadable server with an admin account ("admin") and a token.
+async fn start_with_users() -> Reloadable {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("www")).unwrap();
+    std::fs::write(dir.path().join("www/index.html"), "home").unwrap();
+    std::fs::write(dir.path().join("token.txt"), "s3cret-token\n").unwrap();
+    let hash = wedge_core::auth::hash_password(PASSWORD).unwrap();
+    std::fs::write(dir.path().join("users.txt"), format!("admin:{hash}\n")).unwrap();
+    // The vhost name is markup, to check the status page escapes it.
+    let text = "[server]\nlisten = [\"127.0.0.1:0\"]\ndefault_vhost = \"<b>site</b>\"\n\
+         [server.admin]\nlisten = \"127.0.0.1:0\"\ntoken = \"file:token.txt\"\n\
+         users = \"file:users.txt\"\n\
+         [[vhost]]\nname = \"<b>site</b>\"\nroot = \"www\"\n";
+    std::fs::write(dir.path().join("wedge.toml"), text).unwrap();
+    let path = dir.path().join("wedge.toml");
+    let config = wedge_config::load(&path).unwrap();
+    let server = Server::bind_reloadable(&config, Some(path)).await.unwrap();
+    let public = server.local_addrs()[0];
+    let admin = server.local_admin_addr().unwrap();
+    let reloader = server.reloader();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = rx.await;
+    }));
+    Reloadable {
+        public,
+        admin,
+        dir,
+        reloader,
+        _stop: tx,
+    }
+}
+
+const PASSWORD: &str = "correct horse battery";
+
+fn basic(user: &str, password: &str) -> String {
+    use base64ct::{Base64, Encoding};
+    let encoded = Base64::encode_string(format!("{user}:{password}").as_bytes());
+    format!("Authorization: Basic {encoded}\r\n")
+}
+
+fn admin_get(path: &str, auth: &str) -> String {
+    format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n{auth}Connection: close\r\n\r\n")
+}
+
+#[tokio::test]
+async fn status_page_needs_a_login() {
+    let s = start_with_users().await;
+    // No credentials: the browser is asked for them.
+    let reply = send(s.admin, &admin_get("/", "")).await;
+    assert_eq!(status(&reply), 401, "{reply}");
+    assert_eq!(
+        header(&reply, "www-authenticate"),
+        Some("Basic realm=\"wedge admin\", charset=\"UTF-8\"")
+    );
+    // Metrics are behind the login too.
+    assert_eq!(
+        status(&send(s.admin, &admin_get("/metrics", "")).await),
+        401
+    );
+    let wrong = send(
+        s.admin,
+        &admin_get("/", &basic("admin", "not the password")),
+    )
+    .await;
+    assert_eq!(status(&wrong), 401, "{wrong}");
+    let unknown = send(s.admin, &admin_get("/", &basic("root", PASSWORD))).await;
+    assert_eq!(status(&unknown), 401, "{unknown}");
+
+    let page = send(s.admin, &admin_get("/", &basic("admin", PASSWORD))).await;
+    assert_eq!(status(&page), 200, "{page}");
+    assert!(page.contains("Signed in as admin"), "{page}");
+    assert!(page.contains("wEdge admin"), "{page}");
+    // Configuration text is escaped, never markup.
+    assert!(page.contains("&lt;b&gt;site&lt;/b&gt;"), "{page}");
+    assert!(!page.contains("<b>site</b>"), "{page}");
+    let csp = header(&page, "content-security-policy").unwrap();
+    assert!(
+        csp.starts_with("default-src 'none'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    assert_eq!(header(&page, "x-frame-options"), Some("DENY"));
+    assert_eq!(header(&page, "cache-control"), Some("no-store"));
+    let css = send(
+        s.admin,
+        &admin_get("/-/admin.css", &basic("admin", PASSWORD)),
+    )
+    .await;
+    assert_eq!(status(&css), 200);
+    assert_eq!(
+        header(&css, "content-type"),
+        Some("text/css; charset=utf-8")
+    );
+    let metrics = send(s.admin, &admin_get("/metrics", &basic("admin", PASSWORD))).await;
+    assert_eq!(status(&metrics), 200, "{metrics}");
+    // The public site is unaffected.
+    assert_eq!(status(&send(s.public, &get("/", "x")).await), 200);
+}
+
+#[tokio::test]
+async fn failed_logins_lock_the_address_out() {
+    let s = start_with_users().await;
+    for _ in 0..4 {
+        let reply = send(s.admin, &admin_get("/", &basic("admin", "wrong password!"))).await;
+        assert_eq!(status(&reply), 401, "{reply}");
+    }
+    let reply = send(s.admin, &admin_get("/", &basic("admin", "wrong password!"))).await;
+    assert_eq!(status(&reply), 429, "{reply}");
+    assert_eq!(header(&reply, "retry-after"), Some("300"));
+    // While locked out, the right password does not help.
+    let reply = send(s.admin, &admin_get("/", &basic("admin", PASSWORD))).await;
+    assert_eq!(status(&reply), 429, "{reply}");
+}
+
+#[tokio::test]
+async fn reload_button_works_and_refuses_cross_site_posts() {
+    let s = start_with_users().await;
+    let post = |extra: &str| {
+        format!(
+            "POST /-/reload HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n{}{extra}\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+            basic("admin", PASSWORD)
+        )
+    };
+    // T5.15: a form on another site cannot use the browser's login.
+    for extra in [
+        "Origin: http://evil.example\r\n",
+        "Origin: null\r\n",
+        "Sec-Fetch-Site: cross-site\r\n",
+    ] {
+        let reply = send(s.admin, &post(extra)).await;
+        assert_eq!(status(&reply), 403, "{extra}: {reply}");
+    }
+    let host = s.admin.to_string();
+    std::fs::write(
+        s.dir.path().join("wedge.toml"),
+        std::fs::read_to_string(s.dir.path().join("wedge.toml"))
+            .unwrap()
+            .replace(
+                "root = \"www\"",
+                "root = \"www\"\n[vhost.headers]\n\"X-Version\" = \"2\"",
+            ),
+    )
+    .unwrap();
+    let same = format!(
+        "Origin: http://{}\r\nSec-Fetch-Site: same-origin\r\n",
+        "127.0.0.1"
+    );
+    let reply = send(s.admin, &post(&same)).await;
+    assert_eq!(status(&reply), 303, "{reply}");
+    assert_eq!(header(&reply, "location"), Some("/"));
+    let page = send(s.admin, &admin_get("/", &basic("admin", PASSWORD))).await;
+    assert!(page.contains("Configuration reloaded."), "{page}");
+    // The notice shows once.
+    let page = send(s.admin, &admin_get("/", &basic("admin", PASSWORD))).await;
+    assert!(!page.contains("Configuration reloaded."), "{page}");
+    let site = send(s.public, &get("/", "x")).await;
+    assert_eq!(header(&site, "x-version"), Some("2"), "{site}");
+    // The bearer token still reloads (wedge reload), without a login.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let reply = send(s.admin, &reload_request(Some("s3cret-token"))).await;
+    assert_eq!(status(&reply), 200, "{host}: {reply}");
+    let reply = send(s.admin, &reload_request(Some("wrong"))).await;
+    assert_eq!(status(&reply), 401, "{reply}");
+}
+
+#[tokio::test]
+async fn bad_users_file_stops_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("users.txt"), "admin:plain-text-password\n").unwrap();
+    let toml = format!(
+        "[server]\nlisten = [\"127.0.0.1:0\"]\n[server.admin]\nlisten = \"127.0.0.1:0\"\n\
+         users = \"file:{}\"\n",
+        dir.path()
+            .join("users.txt")
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    );
+    let config = wedge_config::from_str(&toml).unwrap();
+    let err = Server::bind(&config).await.err().unwrap().to_string();
+    assert!(
+        err.contains("users file line 1: hash is not a PHC string"),
+        "{err}"
+    );
+    assert!(!err.contains("plain-text-password"), "{err}");
+}
+
 #[tokio::test]
 async fn restart_only_settings_and_rate_limit() {
     let s = start_reloadable().await;

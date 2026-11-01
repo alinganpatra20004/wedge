@@ -197,6 +197,13 @@ pub struct AdminConfig {
     /// (`env:NAME` or `file:/path`). Without it, reload over HTTP is off.
     #[serde(default)]
     pub token: Option<SecretRef>,
+    /// Administrator accounts, as a secret reference to a users file: one
+    /// `name:$argon2id$...` line per account, written by `wedge admin
+    /// set-password`. When set, every admin request (the status page,
+    /// `/metrics` and reload) needs one of these accounts (HTTP Basic), and
+    /// `GET /` shows the status page. Reloads re-read the file.
+    #[serde(default)]
+    pub users: Option<SecretRef>,
 }
 
 fn default_admin_allow() -> Vec<IpNet> {
