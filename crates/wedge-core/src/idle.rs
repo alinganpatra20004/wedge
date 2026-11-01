@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! A socket wrapper that fails I/O once no bytes have moved in either
 //! direction for the idle timeout. hyper's header timeout starts only when

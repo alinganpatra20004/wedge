@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Debug capture log over real sockets (threat model T5.9 to T5.12).
 

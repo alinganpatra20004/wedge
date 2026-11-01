@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Installs the wedge package in a clean distribution container and checks
 # the result. Usage, from the repository root:

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Release pipeline (threat model T6.1, T6.2, T6.9). A tag v* builds every
 # target, packages them, writes SHA256SUMS, attests build provenance and

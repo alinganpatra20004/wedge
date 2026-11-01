@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 # Running as a service
 
 ## systemd (Debian, Ubuntu, Kali, Fedora, RHEL)

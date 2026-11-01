@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # wedge configuration installed by the .deb/.rpm package. Upgrades keep your
 # edits. Check changes with: wedge check-config -c /etc/wedge/wedge.toml

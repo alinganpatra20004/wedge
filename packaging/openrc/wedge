@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # OpenRC service for wedge (Alpine and other OpenRC systems). Install to
 # /etc/init.d/wedge, then: rc-update add wedge default && rc-service wedge start

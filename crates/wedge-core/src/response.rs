@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Response helpers. Error bodies are generic and never include request data
 //! or filesystem paths (threat model T2.13).

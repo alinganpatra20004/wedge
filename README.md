@@ -53,7 +53,7 @@ wedge run -c wedge.toml
 
 ## Building
 
-Rust 1.80 or newer:
+Rust 1.88 or newer:
 
 ```sh
 cargo build --release -p wedge
@@ -66,4 +66,4 @@ script header).
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Copyright (c) Alingan Patra
+Copyright (c) OpenEdge Labs

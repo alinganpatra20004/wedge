@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 <!--
   wEdge Windows installer (WiX 5). Built by scripts/build-msi.ps1, tested by
   scripts/test-msi.ps1. The user guide's install page describes every dialog
@@ -38,8 +38,8 @@
 
     <Icon Id="wedge.ico" SourceFile="$(var.BrandDir)\wedge.ico" />
     <Property Id="ARPPRODUCTICON" Value="wedge.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/alinganpatra20004/wedge" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/alinganpatra20004/wedge/blob/main/docs/guide/README.md" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/OpenEdge-Labs/wedge" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/OpenEdge-Labs/wedge/blob/main/docs/guide/README.md" />
     <!-- Settings are chosen at install time; "Change" would not apply them. -->
     <Property Id="ARPNOMODIFY" Value="1" />
 
@@ -135,7 +135,7 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuFolder" Name="wEdge" />
+      <Directory Id="WedgeMenuFolder" Name="wEdge" />
     </StandardDirectory>
 
     <!-- Administrators and SYSTEM: full control; users: read and run.
@@ -201,7 +201,7 @@
         <RegistryValue Root="HKLM" Key="SOFTWARE\wedge" Name="AdminPort" Value="[ADMINPORT]" Type="string" KeyPath="yes" />
         <util:InternetShortcut Id="FolderAdminPage" Directory="INSTALLFOLDER" Name="wEdge admin page"
                                Target="http://127.0.0.1:[ADMINPORT]/" />
-        <util:InternetShortcut Id="MenuAdminPage" Directory="StartMenuFolder" Name="wEdge admin page"
+        <util:InternetShortcut Id="MenuAdminPage" Directory="WedgeMenuFolder" Name="wEdge admin page"
                                Target="http://127.0.0.1:[ADMINPORT]/" />
       </Component>
       <!-- "Allow other computers": open the web port in Windows Firewall. -->
@@ -229,7 +229,7 @@
                   Icon="wedge.ico" Description="Remove wEdge (configuration and web content are kept)" />
         <RegistryValue Root="HKLM" Key="SOFTWARE\wedge\Shortcuts" Name="InstallFolder" Value="1" Type="integer" KeyPath="yes" />
       </Component>
-      <Component Id="MenuShortcuts" Directory="StartMenuFolder">
+      <Component Id="MenuShortcuts" Directory="WedgeMenuFolder">
         <Shortcut Id="MenuStart" Name="Start wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="start"
                   WorkingDirectory="INSTALLFOLDER" Icon="wedge.ico" Description="Start the wEdge service" />
         <Shortcut Id="MenuStop" Name="Stop wEdge" Target="[INSTALLFOLDER]wedge-control.cmd" Arguments="stop"
@@ -246,7 +246,7 @@
         <Shortcut Id="MenuGuide" Name="wEdge user guide" Target="[INSTALLFOLDER]docs\html\index.html" />
         <Shortcut Id="MenuUninstall" Name="Uninstall wEdge" Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]"
                   Icon="wedge.ico" Description="Remove wEdge (configuration and web content are kept)" />
-        <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveWedgeMenuFolder" On="uninstall" />
         <RegistryValue Root="HKLM" Key="SOFTWARE\wedge\Shortcuts" Name="StartMenu" Value="1" Type="integer" KeyPath="yes" />
       </Component>
     </Feature>

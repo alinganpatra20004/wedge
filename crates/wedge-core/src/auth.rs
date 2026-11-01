@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Administrator accounts for the admin listener (threat model T5.13 to
 //! T5.16).
@@ -304,7 +304,7 @@ impl Guard {
 
 impl Failures {
     fn expired(&self, now: Instant) -> bool {
-        let lock_over = self.locked_until.map_or(true, |until| now >= until);
+        let lock_over = self.locked_until.is_none_or(|until| now >= until);
         lock_over && now.saturating_duration_since(self.first) >= FAILURE_WINDOW
     }
 }

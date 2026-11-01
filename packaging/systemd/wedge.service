@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # systemd unit for wedge. Install to /etc/systemd/system/wedge.service, then:
 #   sudo useradd --system --no-create-home --shell /usr/sbin/nologin wedge
@@ -9,7 +9,7 @@
 
 [Unit]
 Description=wedge web and application server
-Documentation=https://github.com/alinganpatra20004/wedge
+Documentation=https://github.com/OpenEdge-Labs/wedge
 After=network-online.target
 Wants=network-online.target
 

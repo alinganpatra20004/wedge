@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 # Configuration basics
 
 ## Files
@@ -52,7 +52,7 @@ Editors that support JSON Schema for TOML (for example with the Even Better
 TOML extension) can validate as you type; add this first line:
 
 ```text
-#:schema https://raw.githubusercontent.com/alinganpatra20004/wedge/main/schema/wedge.schema.json
+#:schema https://raw.githubusercontent.com/OpenEdge-Labs/wedge/main/schema/wedge.schema.json
 ```
 
 ## Secrets

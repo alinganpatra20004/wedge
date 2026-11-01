@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 # TLS and HTTPS
 
 wedge terminates TLS itself with rustls: TLS 1.2 and 1.3 only, forward-secret

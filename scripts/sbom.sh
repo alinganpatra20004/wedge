@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Writes the CycloneDX SBOM of the wedge binary, covering the dependencies
 # of every target, to build/wedge-<version>.cdx.json (Phase 7.1). Run inside

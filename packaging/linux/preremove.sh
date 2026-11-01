@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Stops and disables the service on removal (not on upgrade). The wedge user
 # and /etc/wedge are kept, so a reinstall finds its configuration again.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Parses arbitrary strings as secret references. Error messages must not
 //! depend on the input, because the input may be a pasted secret.

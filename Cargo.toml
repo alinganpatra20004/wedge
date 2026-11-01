@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 
 [workspace]
 resolver = "2"
@@ -9,10 +9,10 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.1.1"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["Alingan Patra"]
-repository = "https://github.com/alinganpatra20004/wedge"
+repository = "https://github.com/OpenEdge-Labs/wedge"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

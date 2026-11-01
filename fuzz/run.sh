@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Runs every fuzz target for SECONDS (default 60) each. Needs Linux and the
 # nightly toolchain; on other hosts run it inside the rust Docker image:

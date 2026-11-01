@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! `wedge init` (a starter configuration) and `wedge admin set-password`
 //! (administrator accounts). The Windows installer runs both.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Debug capture example. FOR TROUBLESHOOTING ONLY, NEVER IN PRODUCTION.
 # Rename to 90-debug.toml and restart wedge (a reload cannot turn it on).

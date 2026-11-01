@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Builds the Windows installer build/wedge-<version>-x86_64.msi from the
 # layout in build/x86_64-pc-windows-msvc (made by scripts/build-all.ps1).

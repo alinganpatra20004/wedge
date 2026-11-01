@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Checks that ordinary users cannot replace the service binary (threat
 //! model T6.7): wedge.exe, its folder (a DLL planted there would load into

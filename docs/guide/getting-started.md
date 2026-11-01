@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 # Getting started
 
 ## 1. Install

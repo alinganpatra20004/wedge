@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Renders the user guide (docs/guide/*.md) and the install guides to
 # standalone HTML in build/guide/, for shipping in every archive and package.
@@ -61,7 +61,7 @@ foreach ($file in Get-ChildItem $out -Recurse -Filter *.html) {
     $html = $html.Replace('href="../guide/', 'href="../')
     # Pages that are not rendered here (architecture, security records) open
     # on GitHub.
-    $repo = 'https://github.com/alinganpatra20004/wedge/blob/main'
+    $repo = 'https://github.com/OpenEdge-Labs/wedge/blob/main'
     $html = [regex]::Replace($html, 'href="(?:\.\./)+(architecture|security)/([^"#]+)\.html',
         { param($m) "href=`"$repo/docs/$($m.Groups[1].Value)/$($m.Groups[2].Value).md" })
     $html = [regex]::Replace($html, 'href="(?:\.\./)+SECURITY\.html', "href=`"$repo/SECURITY.md")

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 
 [package]
 name = "wedge"
@@ -12,7 +12,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { version = "4.5.61", features = ["derive"] }
-rpassword = "7.3.1"
+rpassword = "7.5.0"
 serde_json = "1.0.154"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.44"
@@ -35,7 +35,7 @@ tempfile = "3.27.0"
 windows-service = "0.8.1"
 
 # Windows icon and version info (build.rs). Pinned to 0.1.23, the last release
-# on toml 0.8: later ones pull serde_spanned 1.x, which needs Rust 1.85 and
-# breaks the 1.80 MSRV (Cargo parses every locked manifest).
+# on toml 0.8, which the rest of the workspace uses; later ones pull a second
+# toml stack (serde_spanned 1.x).
 [target."cfg(windows)".build-dependencies]
 winresource = "=0.1.23"

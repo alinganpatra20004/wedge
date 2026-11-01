@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Static file serving over real sockets, including traversal attempts that
 //! must never leave the document root (threat model T2.1 to T2.4).

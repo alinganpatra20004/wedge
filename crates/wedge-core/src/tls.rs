@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! TLS termination with rustls and the ring provider (threat model T3.1 to
 //! T3.10).

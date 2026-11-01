@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # One definition for the .deb and .rpm packages (nfpm). Built by
 # scripts/package-linux.sh, which sets VERSION and ARCH (amd64 or arm64) and
@@ -14,7 +14,7 @@ section: web
 priority: optional
 maintainer: Alingan Patra <alinganpatra20004@users.noreply.github.com>
 vendor: Alingan Patra
-homepage: https://github.com/alinganpatra20004/wedge
+homepage: https://github.com/OpenEdge-Labs/wedge
 license: Apache-2.0
 description: |
   wedge web and application server.

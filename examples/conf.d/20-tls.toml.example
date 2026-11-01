@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # TLS example. Rename to 20-tls.toml after creating the certificate files.
 # cert and key are references ("file:/path" or "env:NAME"), never inline PEM.

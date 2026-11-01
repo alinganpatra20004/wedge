@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Sets ownership of /etc/wedge (root-owned, readable by the wedge group only;
 # threat model T6.5) and tells systemd about the unit. The service is not

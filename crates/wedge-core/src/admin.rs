@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Requests on the admin listener (threat model T5.1 to T5.3, T5.13 to
 //! T5.16). The client address was already checked against `admin.allow`

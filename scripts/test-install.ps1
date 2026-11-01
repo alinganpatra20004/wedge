@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Runs every install guide's steps, taken from docs/install/source.json, in a
 # clean container and records the outcome in docs/install/tested.json, which

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # wedge container image: the static musl binary on an empty base, running as
 # a non-root user, with no shell or package manager (threat model T6.6).
@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.title="wedge" \
       org.opencontainers.image.description="wedge web and application server" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.source="https://github.com/alinganpatra20004/wedge"
+      org.opencontainers.image.source="https://github.com/OpenEdge-Labs/wedge"
 COPY build/${TARGET}/wedge /usr/bin/wedge
 COPY packaging/oci/wedge.toml /etc/wedge/wedge.toml
 COPY packaging/linux/www/index.html /srv/www/index.html

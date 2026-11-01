@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Tests the MSI on a disposable Windows machine with administrator rights
 # (the release and installer workflows run it on a GitHub runner); it

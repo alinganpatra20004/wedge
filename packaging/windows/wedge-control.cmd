@@ -1,6 +1,6 @@
 @echo off
 rem SPDX-License-Identifier: Apache-2.0
-rem Copyright (c) Alingan Patra
+rem Copyright (c) OpenEdge Labs
 rem
 rem Controls the wEdge service; the Start menu and install-folder shortcuts
 rem run it. Usage: wedge-control.cmd start|stop|restart|status|reload|edit

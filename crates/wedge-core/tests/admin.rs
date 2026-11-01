@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! The admin listener: metrics, access control and DNS-rebinding defence
 //! (threat model T5.1 to T5.3).

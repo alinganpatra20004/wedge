@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Core server for wedge: listeners, connection handling and request routing.
 
@@ -173,7 +173,7 @@ pub mod fuzzing {
             .nth(usize::from(*pad) % 4)
             .unwrap_or(0);
         let mut planted = b"Authorization: Bearer ".to_vec();
-        planted.extend(std::iter::repeat(b'x').take(usize::from(*pad) * 40));
+        planted.extend(std::iter::repeat_n(b'x', usize::from(*pad) * 40));
         planted.extend_from_slice(SECRET);
         planted.extend_from_slice(b"\r\n");
         stream.splice(at..at, planted);

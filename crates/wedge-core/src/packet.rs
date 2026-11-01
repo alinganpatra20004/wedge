@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Decodes captured frames into IP and TCP header fields for the debug
 //! capture log (`[server.debug] tcp_headers`). Pure parsing, so it is tested
@@ -226,7 +226,7 @@ impl Flows {
         let advanced = self
             .next
             .get(&key)
-            .map_or(true, |&expected| (end.wrapping_sub(expected) as i32) > 0);
+            .is_none_or(|&expected| (end.wrapping_sub(expected) as i32) > 0);
         if advanced {
             self.next.insert(key, end);
         }

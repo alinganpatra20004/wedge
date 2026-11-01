@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Chooses the virtual host for a request from its Host header (HTTP/1) or
 //! `:authority` (HTTP/2). The host is only ever compared against configured

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Builds the wedge OCI image for this machine's architecture from the musl
 # binary in build/ and saves it as build/wedge-<version>-oci-<arch>.tar.

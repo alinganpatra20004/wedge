@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 # Security policy
 
 ## Supported versions
@@ -13,7 +13,7 @@ Until 1.0, only the latest 0.x release receives fixes.
 ## Reporting a vulnerability
 
 Please report security problems privately through GitHub:
-**[Report a vulnerability](https://github.com/alinganpatra20004/wedge/security/advisories/new)**
+**[Report a vulnerability](https://github.com/OpenEdge-Labs/wedge/security/advisories/new)**
 (the repository's Security tab). Do not open a public issue or pull request
 for a suspected vulnerability.
 
@@ -39,7 +39,7 @@ publicly; we aim for 90 days or less.
 
 In scope: the `wedge` binary, its default configuration, the packages,
 installers and container image published on the
-[releases page](https://github.com/alinganpatra20004/wedge/releases), and the
+[releases page](https://github.com/OpenEdge-Labs/wedge/releases), and the
 release pipeline. Out of scope: vulnerabilities in applications behind the
 reverse proxy, configurations that disable documented safeguards (for
 example `log_secrets = true` or `--allow-unprotected-path`), and denial of
@@ -65,11 +65,17 @@ for them.)
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-gh attestation verify <file> --repo alinganpatra20004/wedge
+gh attestation verify <file> --repo OpenEdge-Labs/wedge
 cosign verify-blob <file> --bundle <file>.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/alinganpatra20004/wedge/' \
+  --certificate-identity-regexp '^https://github.com/(OpenEdge-Labs|alinganpatra20004)/wedge/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The project moved from `alinganpatra20004/wedge` to `OpenEdge-Labs/wedge`
+after 0.1.1, so 0.1.x signatures name the old repository; the identity
+pattern above accepts both. GitHub does not show the 0.1.x build provenance
+attestations under the new name; for those releases rely on `SHA256SUMS` and
+the Sigstore signatures, which do not depend on GitHub.
 
 Releases after 0.1.1 are signed with cosign 3, which writes the newer
 Sigstore bundle format. Cosign 3 verifies every release; with cosign 2.4 or

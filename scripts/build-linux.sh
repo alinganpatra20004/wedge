@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Cross-builds the Linux release binaries with cargo-zigbuild. Run inside the
 # ghcr.io/rust-cross/cargo-zigbuild image with the repository at /src, as

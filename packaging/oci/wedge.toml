@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Default configuration in the container image. Inside a container wedge must
 # listen on all interfaces; publish the port with `-p` to choose exposure.

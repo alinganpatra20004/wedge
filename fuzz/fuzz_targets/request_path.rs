@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Feeds arbitrary request paths to the path validator; it panics if an
 //! accepted path could escape the document root (threat model T2.1 to T2.4).

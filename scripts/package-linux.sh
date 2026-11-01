@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Builds the .deb and .rpm packages for amd64 and arm64 from the static musl
 # binaries in build/ (made by scripts/build-all.ps1 or the release workflow).

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Response header policy and the HTTP to HTTPS redirect (threat model T3.11
 //! to T3.13).

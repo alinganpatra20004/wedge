@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Static file serving: GET and HEAD, validators (ETag, Last-Modified),
 //! conditional requests, a single byte range, and pre-compressed variants.

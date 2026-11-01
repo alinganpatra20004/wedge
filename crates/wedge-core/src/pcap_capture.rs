@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Live IP/TCP header capture for `[server.debug] tcp_headers` (threat
 //! model T5.11). Built only with the `packet-capture` feature.

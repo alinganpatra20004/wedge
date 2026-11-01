@@ -1,6 +1,6 @@
 {
-  "_comment": "SPDX-License-Identifier: Apache-2.0. Copyright (c) Alingan Patra. Single source for the install guides: scripts/gen-install-docs.ps1 writes docs/install/*.md from it and scripts/test-install.ps1 runs the same steps in clean containers. Commands use $VERSION and $BASE (the release download URL).",
-  "base_url": "https://github.com/alinganpatra20004/wedge/releases/download/v$VERSION",
+  "_comment": "SPDX-License-Identifier: Apache-2.0. Copyright (c) OpenEdge Labs. Single source for the install guides: scripts/gen-install-docs.ps1 writes docs/install/*.md from it and scripts/test-install.ps1 runs the same steps in clean containers. Commands use $VERSION and $BASE (the release download URL).",
+  "base_url": "https://github.com/OpenEdge-Labs/wedge/releases/download/v$VERSION",
   "platforms": [
     {
       "id": "debian-12",

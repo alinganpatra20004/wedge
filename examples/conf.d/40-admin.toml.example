@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Admin listener example. Rename to 40-admin.toml to use it.
 # Serves GET /metrics (Prometheus text format) and, with a token,

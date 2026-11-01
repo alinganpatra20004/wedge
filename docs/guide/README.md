@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 <p align="center"><img src="../../packaging/branding/wedge-logo.svg" alt="wEdge" width="420"></p>
 
 # wEdge user guide

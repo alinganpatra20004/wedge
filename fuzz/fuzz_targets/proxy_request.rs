@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Feeds arbitrary request paths and header sets to the reverse proxy's path
 //! check and header sanitiser (threat model T4.5, T4.6, T4.13).

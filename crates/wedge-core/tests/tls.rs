@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! TLS termination over real sockets: SNI per vhost, the SNI/Host check,
 //! version and ALPN policy, handshake limits and certificate loading

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Alingan Patra
+# Copyright (c) OpenEdge Labs
 #
 # Checks every ```toml block in docs/guide/*.md with `wedge check-config`,
 # so the user guide never shows a configuration wedge would reject.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Windows service: install, uninstall, control, and the entry point the
 //! Service Control Manager starts (threat model T5.7, T5.8, T6.7).

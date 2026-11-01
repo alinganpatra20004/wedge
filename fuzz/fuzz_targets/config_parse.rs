@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Parses and validates arbitrary text as a configuration document.
 //! Must never panic, whatever the input.

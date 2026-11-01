@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Alingan Patra
+// Copyright (c) OpenEdge Labs
 
 //! Reverse proxy over real sockets with test upstreams (threat model T4.1 to
 //! T4.13).

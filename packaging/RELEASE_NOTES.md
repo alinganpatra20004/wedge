@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) Alingan Patra -->
+<!-- Copyright (c) OpenEdge Labs -->
 Security update for **wEdge** (`wedge`) 0.1.0, from the security assessment
-of the first release ([report](https://github.com/alinganpatra20004/wedge/blob/main/docs/security/assessment-report.md)).
+of the first release ([report](https://github.com/OpenEdge-Labs/wedge/blob/main/docs/security/assessment-report.md)).
 No high or critical issues were found. Upgrading is recommended.
 
 ## Security fixes
@@ -52,16 +52,16 @@ No high or critical issues were found. Upgrading is recommended.
 | `wedge-0.1.1-oci-{amd64,arm64}.tar` | container image (`docker load -i`) |
 | `wedge-0.1.1.cdx.json` | software bill of materials (CycloneDX 1.5) |
 
-Install guides: <https://github.com/alinganpatra20004/wedge/blob/main/docs/install/README.md>.
+Install guides: <https://github.com/OpenEdge-Labs/wedge/blob/main/docs/install/README.md>.
 Every package and archive contains the user guide (Markdown and HTML).
 
 ## Verifying
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-gh attestation verify <file> --repo alinganpatra20004/wedge
+gh attestation verify <file> --repo OpenEdge-Labs/wedge
 cosign verify-blob <file> --bundle <file>.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/alinganpatra20004/wedge/' \
+  --certificate-identity-regexp 'https://github.com/OpenEdge-Labs/wedge/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cargo audit bin wedge    # inside an unpacked archive
 ```
