@@ -154,3 +154,20 @@ linux, windows (MSI install test), macos and publish all passed.
 | Container image | Trivy 0.56.2 | Rust binary detected, 152 packages, 0 vulnerabilities |
 | Install guides | `scripts/test-install.ps1` against the release URL | Debian 12, Ubuntu 24.04, Kali, Fedora 40, Rocky 9, Alpine 3.20: all pass. The harness's fixed 1 s wait for wedge was flaky once on Rocky 9 under load; it now polls for up to 10 s |
 | Published image | smoke (45 checks), traversal (104 payloads), robustness (13 attacks) | 45/45, 104/104, 13/13 |
+
+## Major GitHub Actions updates (2026-11-01)
+
+The five Dependabot pull requests (#1 to #5) were tested together on a
+temporary branch before merging. The changes were checkout 4.4.0 to 7.0.1,
+upload-artifact 4.6.2 to 7.0.2, download-artifact 4.3.0 to 8.0.2,
+cosign-installer 3.9.1 to 4.1.2, and SignPath submit-signing-request 1.3
+to 3.0.
+
+| Check | Result |
+|---|---|
+| CI and Security on each pull request | all 10 jobs pass |
+| Release workflow dry run (run 41265554652) | gate, linux, windows (MSI install test), macos and publish pass; the output has all 17 release files and `SHA256SUMS` verifies |
+| Keyless signing with cosign-installer 4.1.2 (cosign 3.0.6), using the release workflow's `sign-blob --bundle` command | signs and verifies in the workflow |
+| The new bundle, verified locally | cosign 3.0.2: verified. Cosign 2.4.1 and 2.6.1: verified only with `--new-bundle-format`, which `SECURITY.md` now documents |
+| The v0.1.1 (old format) bundle with cosign 3.0.2 | verified |
+| SignPath 3.0 inputs | every input the workflow passes still exists. The step stays off until the SignPath token exists, so it is not yet run |

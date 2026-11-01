@@ -71,6 +71,11 @@ cosign verify-blob <file> --bundle <file>.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+Releases after 0.1.1 are signed with cosign 3, which writes the newer
+Sigstore bundle format. Cosign 3 verifies every release; with cosign 2.4 or
+later, add `--new-bundle-format` to the command above for releases after
+0.1.1.
+
 From the release after 0.1.0, each release has a CycloneDX SBOM
 (`wedge-<version>.cdx.json`), and the binaries embed their dependency list
 (`cargo auditable`), so a downloaded binary can be checked directly:
