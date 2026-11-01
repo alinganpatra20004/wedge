@@ -23,16 +23,24 @@ $ErrorActionPreference = 'Stop'
 $Msi = (Resolve-Path $Msi).Path
 function Fail([string]$why) { Write-Host "FAIL: $why"; exit 1 }
 function Pass([string]$what) { Write-Host "  ok: $what" }
-$logDir = Join-Path ([IO.Path]::GetTempPath()) 'wedge-msi-logs'
+$logDir = Join-Path ($env:RUNNER_TEMP ?? [IO.Path]::GetTempPath()) 'wedge-msi-logs'
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $password = 'correct horse battery staple'
+
+# An installer log as text: msiexec writes UTF-16 or the ANSI code page.
+function Read-Log([string]$path) {
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $utf16 = $bytes.Length -gt 1 -and ($bytes[1] -eq 0 -or ($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE))
+    if ($utf16) { [Text.Encoding]::Unicode.GetString($bytes) } else { [Text.Encoding]::Default.GetString($bytes) }
+}
 
 function Invoke-Msi([string]$name, [string]$arguments) {
     $log = Join-Path $logDir "$name.log"
     $p = Start-Process msiexec.exe -ArgumentList "$arguments /qn /l*v `"$log`"" -Wait -PassThru
     if ($p.ExitCode -ne 0) {
-        Get-Content $log -Encoding Unicode | Select-String -Pattern 'error|failed|return value 3' -Context 2, 2 |
-            Select-Object -Last 15 | ForEach-Object { $_.ToString() }
+        $lines = (Read-Log $log) -split "`r?`n"
+        $failed = ($lines | Select-String -Pattern 'Return value 3' | Select-Object -First 1).LineNumber
+        if ($failed) { $lines[[Math]::Max(0, $failed - 30)..$failed] }
         Fail "$name exit code $($p.ExitCode)"
     }
     $log
@@ -91,7 +99,11 @@ if (-not $users.AreAccessRulesProtected -or ($users.Access.IdentityReference.Val
     Fail 'the users file is readable by ordinary users'
 }
 Pass 'install and configuration folders locked; users file private'
-if ((Get-Content $log -Raw -Encoding Unicode).Contains($password)) { Fail 'the password is in the installer log' }
+$bytes = [IO.File]::ReadAllBytes($log)
+foreach ($encoding in [Text.Encoding]::Unicode, [Text.Encoding]::UTF8, [Text.Encoding]::Default) {
+    if ($encoding.GetString($bytes).Contains($password)) { Fail 'the password is in the installer log' }
+}
+if (-not (Read-Log $log).Contains('InstallService')) { Fail 'installer log unreadable, so the password check proves nothing' }
 if ((Get-Content $config -Raw).Contains($password) -or (Get-Content "$root\conf\admin-users.txt" -Raw).Contains($password)) {
     Fail 'the password is stored in clear'
 }
