@@ -32,7 +32,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 tokio-util = { version = "0.7.19", features = ["io"] }
 tracing = "0.1.44"
 webpki = { version = "0.103.16", package = "rustls-webpki", default-features = false, features = ["std", "ring"] }
-wedge-config = { version = "0.1.1", path = "../wedge-config" }
+wedge-config = { version = "0.2.0", path = "../wedge-config" }
 zeroize = "1.8.2"
 
 [features]

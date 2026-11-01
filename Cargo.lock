@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "wedge"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "rpassword",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "wedge-config"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "jsonschema",
  "schemars",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "wedge-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64ct",
