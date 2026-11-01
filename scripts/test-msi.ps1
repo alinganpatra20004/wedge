@@ -136,9 +136,9 @@ if ($status -notmatch 'running') { Fail "wedge-control status: $status" }
 $restart = & $exe service restart 2>&1 | Out-String
 if ($restart -notmatch 'running') { Fail "service restart: $restart" }
 Wait-Running
-& $exe service reload | Out-Null
+$reload = & $exe service reload 2>&1 | Out-String
 Start-Sleep 2
-if (-not (Get-Content "$root\logs\wedge.log" -Raw).Contains('configuration reloaded')) { Fail 'reload not logged' }
+if (-not (Get-Content "$root\logs\wedge.log" -Raw).Contains('configuration reloaded')) { Fail "reload not logged: $reload" }
 Pass 'control script, restart and reload work; log in the install folder'
 
 Invoke-Msi 'fresh-uninstall' "/x `"$Msi`"" | Out-Null

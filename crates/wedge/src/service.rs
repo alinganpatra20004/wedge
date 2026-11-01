@@ -242,7 +242,7 @@ pub(crate) fn control(what: Control) -> Result<(), String> {
             ServiceAccess::QUERY_STATUS
                 | ServiceAccess::START
                 | ServiceAccess::STOP
-                | ServiceAccess::PAUSE_CONTINUE
+                | ServiceAccess::USER_DEFINED_CONTROL
         }
     };
     let service = manager.open_service(NAME, access).map_err(|e| {
