@@ -78,8 +78,17 @@ foreach ($p in $source.platforms) {
         }
         'windows' {
             $msi = $asset.Replace('${VERSION}', $version)
-            $md += '## 1. Download and verify', '', 'In PowerShell:', '', (Get-PsBlock @(
-                    "`$BASE = `"$($base.Replace('$VERSION', $version))`""
+            $zip = "wedge-$version-x86_64-pc-windows-msvc.zip"
+            $rel = $base.Replace('$VERSION', $version)
+            $md += '## 1. Download and verify', '',
+                'Download from the browser:', '',
+                "- Installer: [$msi]($rel/$msi)",
+                "- Portable zip, no installer: [$zip]($rel/$zip) (see [below](#portable-zip-no-installer))",
+                "- Checksums: [SHA256SUMS]($rel/SHA256SUMS)",
+                "- All files and signatures: the [v$version release page]($($rel.Replace('/releases/download/', '/releases/tag/')))", '',
+                'Then compare `Get-FileHash <file>` with the file''s line in `SHA256SUMS`.', '',
+                'Or download and verify in PowerShell:', '', (Get-PsBlock @(
+                    "`$BASE = `"$rel`""
                     "Invoke-WebRequest `"`$BASE/$msi`" -OutFile $msi"
                     "Invoke-WebRequest `"`$BASE/SHA256SUMS`" -OutFile SHA256SUMS"
                     "`$expected = (Select-String SHA256SUMS -Pattern ' $msi`$').Line.Split(' ')[0]"
@@ -109,7 +118,7 @@ foreach ($p in $source.platforms) {
                 "Settings > Apps > wEdge > Uninstall, or ``msiexec /x $msi``. The configuration in",
                 '`C:\ProgramData\wedge` is kept.', ''
             $md += '## Portable zip (no installer)', '',
-                "``wedge-$version-x86_64-pc-windows-msvc.zip`` contains the same files. Copy",
+                "[$zip]($rel/$zip) contains the same files. Copy",
                 '`wedge.exe` to `C:\Program Files\wedge\` (the service refuses other locations),',
                 'then from an elevated PowerShell:', '', (Get-PsBlock @(
                     "& 'C:\Program Files\wedge\wedge.exe' service install -c C:\ProgramData\wedge\wedge.toml"

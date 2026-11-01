@@ -8,7 +8,16 @@
 
 ## 1. Download and verify
 
-In PowerShell:
+Download from the browser:
+
+- Installer: [wedge-0.1.1-x86_64.msi](https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1/wedge-0.1.1-x86_64.msi)
+- Portable zip, no installer: [wedge-0.1.1-x86_64-pc-windows-msvc.zip](https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1/wedge-0.1.1-x86_64-pc-windows-msvc.zip) (see [below](#portable-zip-no-installer))
+- Checksums: [SHA256SUMS](https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1/SHA256SUMS)
+- All files and signatures: the [v0.1.1 release page](https://github.com/alinganpatra20004/wedge/releases/tag/v0.1.1)
+
+Then compare `Get-FileHash <file>` with the file's line in `SHA256SUMS`.
+
+Or download and verify in PowerShell:
 
 ```powershell
 $BASE = "https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1"
@@ -62,7 +71,7 @@ Settings > Apps > wEdge > Uninstall, or `msiexec /x wedge-0.1.1-x86_64.msi`. The
 
 ## Portable zip (no installer)
 
-`wedge-0.1.1-x86_64-pc-windows-msvc.zip` contains the same files. Copy
+[wedge-0.1.1-x86_64-pc-windows-msvc.zip](https://github.com/alinganpatra20004/wedge/releases/download/v0.1.1/wedge-0.1.1-x86_64-pc-windows-msvc.zip) contains the same files. Copy
 `wedge.exe` to `C:\Program Files\wedge\` (the service refuses other locations),
 then from an elevated PowerShell:
 
