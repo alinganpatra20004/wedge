@@ -199,9 +199,9 @@
       </Component>
       <Component Id="AdminSettings" Directory="INSTALLFOLDER" Condition="ADMINENABLED">
         <RegistryValue Root="HKLM" Key="SOFTWARE\wedge" Name="AdminPort" Value="[ADMINPORT]" Type="string" KeyPath="yes" />
-        <util:InternetShortcut Id="FolderAdminPage" Directory="INSTALLFOLDER" Name="wEdge admin page"
+        <util:InternetShortcut Id="FolderAdminPage" Directory="INSTALLFOLDER" Name="wEdge admin page" Type="url"
                                Target="http://127.0.0.1:[ADMINPORT]/" />
-        <util:InternetShortcut Id="MenuAdminPage" Directory="WedgeMenuFolder" Name="wEdge admin page"
+        <util:InternetShortcut Id="MenuAdminPage" Directory="WedgeMenuFolder" Name="wEdge admin page" Type="url"
                                Target="http://127.0.0.1:[ADMINPORT]/" />
       </Component>
       <!-- "Allow other computers": open the web port in Windows Firewall. -->
